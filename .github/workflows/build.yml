@@ -45,14 +45,8 @@ jobs:
           #ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
           #define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
 
-          // Tell the SDK build system: RP2350 platform, CYW43 present
-          // These pico_board_cmake_set calls are parsed by the SDK cmake layer
-          // and are what actually enables the CYW43 driver to be compiled in.
           pico_board_cmake_set(PICO_PLATFORM, rp2350)
           pico_board_cmake_set(PICO_CYW43_SUPPORTED, 1)
-
-          // RP2350B variant (not A)
-          // Do NOT define PICO_RP2350A here — this board uses the B die
 
           // --- FLASH: 16MB W25Q128 ---
           #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
@@ -64,7 +58,6 @@ jobs:
           #endif
 
           // --- LED ---
-          // LED2 is wired directly to GPIO23 on this board (unlike Pico 2 W where LED is on CYW43)
           #ifndef PICO_DEFAULT_LED_PIN
           #define PICO_DEFAULT_LED_PIN 23
           #endif
@@ -109,22 +102,11 @@ jobs:
           #endif
 
           // --- VSYS ---
-          // GPIO46 = VSYS_SENSE, GPIO47 = PSRAM_CS (do not confuse)
           #ifndef PICO_VSYS_PIN
           #define PICO_VSYS_PIN 46
           #endif
 
-          // ── CYW43 / Radio Module 2 (RM2) ──────────────────────────────────────
-          // Confirmed from schematic:
-          //   WL_ON  → GPIO36  (RM2 B5_WLON)
-          //   WL_D   → GPIO37  (RM2 A5_DI, bidirectional; IRQ via R21 10K on B3_IRQ)
-          //   WL_CS  → GPIO38  (RM2 B2_CS)
-          //   WL_CLK → GPIO39  (RM2 A3_SCLK)
-          //   A6_DO  → not connected to RP2350 (bidirectional single-wire design)
-          //   B3_IRQ → tied to WL_D via R21 only, no separate GPIO
-          //   LED_WLGP0 → RM2 GPIO0 → LED1 (not wired back to RP2350)
-          //   VBUS_DET  → RM2 C3_GPIO2
-
+          // --- CYW43 / RM2 pins (confirmed from schematic) ---
           #ifndef CYW43_WL_GPIO_COUNT
           #define CYW43_WL_GPIO_COUNT 3
           #endif
@@ -140,12 +122,9 @@ jobs:
           #ifndef CYW43_PIN_WL_DYNAMIC
           #define CYW43_PIN_WL_DYNAMIC 0
           #endif
-
-          // WL_ON → GPIO36
           #ifndef CYW43_DEFAULT_PIN_WL_REG_ON
           #define CYW43_DEFAULT_PIN_WL_REG_ON 36u
           #endif
-          // WL_D → GPIO37 (bidirectional data + IRQ)
           #ifndef CYW43_DEFAULT_PIN_WL_DATA_OUT
           #define CYW43_DEFAULT_PIN_WL_DATA_OUT 37u
           #endif
@@ -155,11 +134,9 @@ jobs:
           #ifndef CYW43_DEFAULT_PIN_WL_HOST_WAKE
           #define CYW43_DEFAULT_PIN_WL_HOST_WAKE 37u
           #endif
-          // WL_CLK → GPIO39
           #ifndef CYW43_DEFAULT_PIN_WL_CLOCK
           #define CYW43_DEFAULT_PIN_WL_CLOCK 39u
           #endif
-          // WL_CS → GPIO38
           #ifndef CYW43_DEFAULT_PIN_WL_CS
           #define CYW43_DEFAULT_PIN_WL_CS 38u
           #endif
@@ -168,12 +145,19 @@ jobs:
           #define PICO_RP2350_A2_SUPPORTED 1
           #endif
 
-          #endif // _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+          #endif
           EOF
 
       - name: Patch CMakeLists.txt for Waveshare board
         run: |
-          sed -i 's/set(PICO_BOARD pico2_w)/set(PICO_BOARD waveshare_rp2350b_plus_w)/' CMakeLists.txt
+          sed -i 's/set(PICO_BOARD pico2_w[^)]*)/set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")/' CMakeLists.txt
+
+      - name: Verify patch
+        run: |
+          echo "=== Board header first 5 lines ==="
+          head -10 "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
+          echo "=== CMakeLists PICO_BOARD line ==="
+          grep "PICO_BOARD" CMakeLists.txt
 
       - name: Build standard firmware
         run: |
