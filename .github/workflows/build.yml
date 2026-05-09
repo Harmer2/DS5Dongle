@@ -45,9 +45,6 @@ jobs:
           #ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
           #define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
 
-          // RP2350B chip (not A variant)
-          #define PICO_RP2350A 0
-
           // Flash: 16MB W25Q128
           #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
           #ifndef PICO_FLASH_SPI_CLKDIV
@@ -62,7 +59,7 @@ jobs:
           #define PICO_DEFAULT_LED_PIN 23
           #endif
 
-          // UART
+          // UART0 on GPIO0/1
           #ifndef PICO_DEFAULT_UART
           #define PICO_DEFAULT_UART 0
           #endif
@@ -73,7 +70,7 @@ jobs:
           #define PICO_DEFAULT_UART_RX_PIN 1
           #endif
 
-          // I2C
+          // I2C1 on GPIO6/7
           #ifndef PICO_DEFAULT_I2C
           #define PICO_DEFAULT_I2C 1
           #endif
@@ -84,7 +81,7 @@ jobs:
           #define PICO_DEFAULT_I2C_SCL_PIN 7
           #endif
 
-          // SPI
+          // SPI0 on GPIO16/18/19/17
           #ifndef PICO_DEFAULT_SPI
           #define PICO_DEFAULT_SPI 0
           #endif
@@ -101,15 +98,21 @@ jobs:
           #define PICO_DEFAULT_SPI_CSN_PIN 17
           #endif
 
-          // VSYS sense on GPIO47
+          // VSYS sense on GPIO46 (GPIO47 is PSRAM_CS)
           #ifndef PICO_VSYS_PIN
-          #define PICO_VSYS_PIN 47
+          #define PICO_VSYS_PIN 46
           #endif
 
-          // CYW43 / Radio Module 2 pins (from schematic)
+          // ── CYW43 / Radio Module 2 (RM2) ──────────────────────────────────────
+          // Single bidirectional data line (WL_D), same as Pico 2 W design.
+          // A6_DO has no connection to RP2350 (confirmed from schematic).
+          // B3_IRQ is tied to WL_D via R21 (10K), no separate GPIO.
+          // LED_WLGP0 drives LED1 via RM2 GPIO0 only, not wired back to RP2350.
+
           #ifndef CYW43_WL_GPIO_COUNT
           #define CYW43_WL_GPIO_COUNT 3
           #endif
+          // LED_WLGP0 = RM2 GPIO0 → LED1
           #ifndef CYW43_WL_GPIO_LED_PIN
           #define CYW43_WL_GPIO_LED_PIN 0
           #endif
@@ -117,11 +120,11 @@ jobs:
           #define CYW43_PIN_WL_DYNAMIC 0
           #endif
 
-          // WL_ON  -> GPIO36
+          // WL_ON  → GPIO36  (RM2 B5_WLON)
           #ifndef CYW43_DEFAULT_PIN_WL_REG_ON
           #define CYW43_DEFAULT_PIN_WL_REG_ON 36u
           #endif
-          // WL_D   -> GPIO37 (bidirectional data)
+          // WL_D   → GPIO37  (RM2 A5_DI, bidirectional; IRQ via R21 on B3_IRQ)
           #ifndef CYW43_DEFAULT_PIN_WL_DATA_OUT
           #define CYW43_DEFAULT_PIN_WL_DATA_OUT 37u
           #endif
@@ -131,17 +134,13 @@ jobs:
           #ifndef CYW43_DEFAULT_PIN_WL_HOST_WAKE
           #define CYW43_DEFAULT_PIN_WL_HOST_WAKE 37u
           #endif
-          // WL_CLK -> GPIO39
+          // WL_CLK → GPIO39  (RM2 A3_SCLK)
           #ifndef CYW43_DEFAULT_PIN_WL_CLOCK
           #define CYW43_DEFAULT_PIN_WL_CLOCK 39u
           #endif
-          // WL_CS  -> GPIO38
-          #ifndef CYW43_DEFAULT_PIN_WL_CS
-          #define CYW43_DEFAULT_PIN_WL_CS 38u
-          #endif
-
-          #ifndef PICO_RP2350_A2_SUPPORTED
-          #define PICO_RP2350_A2_SUPPORTED 1
+          // WL_CS  → GPIO38  (RM2 B2_CS)  — NOTE: macro must be CHIP_SELECT
+          #ifndef CYW43_DEFAULT_PIN_WL_CHIP_SELECT
+          #define CYW43_DEFAULT_PIN_WL_CHIP_SELECT 38u
           #endif
 
           #endif // _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
@@ -155,19 +154,17 @@ jobs:
         run: |
           cmake -S . -B build/standard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_SERIAL=ON
+            -DPICO_SDK_PATH="$PICO_SDK_PATH"
           cmake --build build/standard --target ds5-bridge
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
-          
+
       - name: Build DSE firmware
         run: |
           cmake -S . -B build/dse -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_DSE=ON \
-            -DENABLE_SERIAL=ON
+            -DENABLE_DSE=ON
           cmake --build build/dse --target ds5-bridge
           cp build/dse/ds5-bridge.uf2 artifacts/ds5-bridge-dse.uf2
 
