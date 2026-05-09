@@ -138,12 +138,20 @@ jobs:
           #ifndef CYW43_DEFAULT_PIN_WL_CLOCK
           #define CYW43_DEFAULT_PIN_WL_CLOCK 39u
           #endif
-          // WL_CS  → GPIO38  (RM2 B2_CS)  — NOTE: macro must be CHIP_SELECT
+          // WL_CS  → GPIO38  (RM2 B2_CS)
           #ifndef CYW43_DEFAULT_PIN_WL_CHIP_SELECT
           #define CYW43_DEFAULT_PIN_WL_CHIP_SELECT 38u
           #endif
 
           #endif // _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+          EOF
+
+      - name: Inject Waveshare RP2350B-Plus-W board cmake
+        run: |
+          cat > "$PICO_SDK_PATH/src/boards/waveshare_rp2350b_plus_w.cmake" << 'EOF'
+          # Board cmake for Waveshare RP2350B-Plus-W
+          # Enables CYW43 (RM2 module) support — required for Bluetooth to compile in
+          set(PICO_CYW43_SUPPORTED 1)
           EOF
 
       - name: Patch CMakeLists.txt for Waveshare board
