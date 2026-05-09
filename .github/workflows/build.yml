@@ -155,17 +155,19 @@ jobs:
         run: |
           cmake -S . -B build/standard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH"
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_SERIAL=ON
           cmake --build build/standard --target ds5-bridge
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
-
+          
       - name: Build DSE firmware
         run: |
           cmake -S . -B build/dse -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
-            -DENABLE_DSE=ON
+            -DENABLE_DSE=ON \
+            -DENABLE_SERIAL=ON
           cmake --build build/dse --target ds5-bridge
           cp build/dse/ds5-bridge.uf2 artifacts/ds5-bridge-dse.uf2
 
