@@ -41,7 +41,7 @@ static bool plug_headset = false;
 // Reduced stack from 8192 to 4096 words (16KB).
 // Opus encoder + WDL resampler fit comfortably within 16KB at 360 MHz.
 // If core1 crashes silently (audio stops), revert to 8192.
-alignas(8) static uint32_t audio_core1_stack[4096];
+alignas(8) static uint32_t audio_core1_stack[8192];
 
 queue_t audio_fifo;
 static uint8_t opus_buf[200];
