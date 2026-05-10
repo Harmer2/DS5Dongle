@@ -35,9 +35,8 @@ endif ()
 
 # Opus encoder complexity: 0=lowest CPU, 10=highest quality
 # Passed via cmake -DOPUS_COMPLEXITY=2
-if (NOT DEFINED OPUS_COMPLEXITY)
-    set(OPUS_COMPLEXITY 0)
-endif ()
+# FIX: Use CACHE STRING so CMake properly tracks it when passed via CLI
+set(OPUS_COMPLEXITY 0 CACHE STRING "Opus encoder complexity (0-10)")
 
 include(pico_sdk_import.cmake)
 
