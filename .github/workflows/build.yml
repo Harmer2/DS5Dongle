@@ -80,14 +80,16 @@ jobs:
           cat > "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h" << 'EOF'
           #ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
           #define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
-
           pico_board_cmake_set(PICO_PLATFORM, rp2350)
           pico_board_cmake_set(PICO_CYW43_SUPPORTED, 1)
 
           // --- FLASH: 16MB W25Q128 ---
           #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
           #ifndef PICO_FLASH_SPI_CLKDIV
-          #define PICO_FLASH_SPI_CLKDIV 2
+          // CLKDIV 6: at 320 MHz -> 53 MHz flash, at 360 MHz -> 60 MHz flash
+          // Both safely under W25Q128's 80 MHz max.
+          // Previous CLKDIV 2 was 160 MHz at 320 MHz — dangerously over spec.
+          #define PICO_FLASH_SPI_CLKDIV 6
           #endif
           #ifndef PICO_FLASH_SIZE_BYTES
           #define PICO_FLASH_SIZE_BYTES (16 * 1024 * 1024)
@@ -142,7 +144,7 @@ jobs:
           #define PICO_VSYS_PIN 46
           #endif
 
-          // --- CYW43 / RM2 pins (confirmed from schematic) ---
+          // --- CYW43 / RM2 pins ---
           #ifndef CYW43_WL_GPIO_COUNT
           #define CYW43_WL_GPIO_COUNT 3
           #endif
@@ -180,7 +182,6 @@ jobs:
           #ifndef PICO_RP2350_A2_SUPPORTED
           #define PICO_RP2350_A2_SUPPORTED 1
           #endif
-
           #endif
           EOF
 
@@ -190,27 +191,29 @@ jobs:
 
       - name: Verify patch
         run: |
-          echo "=== Board header first 10 lines ==="
-          head -10 "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
+          echo "=== Board header CLKDIV line ==="
+          grep "CLKDIV" "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
           echo "=== CMakeLists PICO_BOARD line ==="
           grep "PICO_BOARD" CMakeLists.txt
 
-      - name: Build standard firmware
+      - name: Build standard firmware (360 MHz, Opus complexity 2)
         run: |
           cmake -S . -B build/standard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
-            -DPICO_SDK_PATH="$PICO_SDK_PATH"
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DOPUS_COMPLEXITY=2
           cmake --build build/standard --target ds5-bridge
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
 
-      - name: Build Debug firmware
+      - name: Build debug firmware
         run: |
           cmake -S . -B build/debug -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DENABLE_SERIAL=ON \
-            -DENABLE_VERBOSE=ON
+            -DENABLE_VERBOSE=ON \
+            -DOPUS_COMPLEXITY=2
           cmake --build build/debug --target ds5-bridge
           cp build/debug/ds5-bridge.uf2 artifacts/ds5-bridge-debug.uf2
 
@@ -221,7 +224,7 @@ jobs:
           archive: false
           if-no-files-found: error
 
-      - name: Upload Debug UF2 artifact
+      - name: Upload debug UF2 artifact
         uses: actions/upload-artifact@v7
         with:
           path: artifacts/ds5-bridge-debug.uf2
