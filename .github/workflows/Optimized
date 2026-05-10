@@ -1,0 +1,160 @@
+name: Build Waveshare Optimized Firmware
+
+on:
+  push:
+    branches:
+      - "**"
+  workflow_dispatch:
+
+env:
+  PICO_SDK_REF: 2.2.0
+  TINYUSB_REF: 0.20.0
+  PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
+  APT_PACKAGES: >-
+    cmake
+    python3
+    build-essential
+    gcc-arm-none-eabi
+    libnewlib-arm-none-eabi
+    libstdc++-arm-none-eabi-newlib
+    ninja-build
+
+jobs:
+  build:
+    name: Build Optimized UF2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Prepare build dependency cache
+        id: apt-cache
+        run: |
+          mkdir -p "$RUNNER_TEMP/apt-cache/partial"
+          . /etc/os-release
+          package_hash="$(printf '%s' "$APT_PACKAGES" | sha256sum | cut -d ' ' -f 1)"
+          echo "dir=$RUNNER_TEMP/apt-cache" >> "$GITHUB_OUTPUT"
+          echo "os=${ID}-${VERSION_ID}" >> "$GITHUB_OUTPUT"
+          echo "package-hash=$package_hash" >> "$GITHUB_OUTPUT"
+
+      - name: Cache build dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.apt-cache.outputs.dir }}
+          key: ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-${{ steps.apt-cache.outputs.package-hash }}
+          restore-keys: |
+            ${{ runner.os }}-${{ runner.arch }}-apt-${{ steps.apt-cache.outputs.os }}-
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install --download-only -y $APT_PACKAGES
+          sudo apt-get -o Dir::Cache::archives="${{ steps.apt-cache.outputs.dir }}" install -y $APT_PACKAGES
+          sudo chmod -R a+rX "${{ steps.apt-cache.outputs.dir }}"
+
+      - name: Cache Pico SDK
+        id: cache-pico-sdk
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.PICO_SDK_PATH }}
+          key: ${{ runner.os }}-${{ runner.arch }}-pico-sdk-${{ env.PICO_SDK_REF }}-tinyusb-${{ env.TINYUSB_REF }}
+
+      - name: Download Pico SDK
+        if: steps.cache-pico-sdk.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
+          git -C "$PICO_SDK_PATH" submodule update --init --recursive
+
+      - name: Switch TinyUSB to configured tag
+        run: |
+          if ! git -C "$PICO_SDK_PATH/lib/tinyusb" rev-parse -q --verify "refs/tags/$TINYUSB_REF" >/dev/null; then
+            git -C "$PICO_SDK_PATH/lib/tinyusb" fetch --depth 1 origin "refs/tags/$TINYUSB_REF:refs/tags/$TINYUSB_REF"
+          fi
+          git -C "$PICO_SDK_PATH/lib/tinyusb" checkout --detach "$TINYUSB_REF"
+
+      - name: Inject Waveshare RP2350B-Plus-W board header
+        run: |
+          cat > "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h" << 'EOF'
+          #ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+          #define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+
+          pico_board_cmake_set(PICO_PLATFORM, rp2350)
+          pico_board_cmake_set(PICO_CYW43_SUPPORTED, 1)
+
+          // --- FLASH: 16MB W25Q128 ---
+          #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
+          #ifndef PICO_FLASH_SPI_CLKDIV
+          #define PICO_FLASH_SPI_CLKDIV 4  // Safely handles 360MHz CPU clock
+          #endif
+          #ifndef PICO_FLASH_SIZE_BYTES
+          #define PICO_FLASH_SIZE_BYTES (16 * 1024 * 1024)
+          #endif
+
+          // --- Pin Mappings ---
+          #ifndef PICO_DEFAULT_LED_PIN
+          #define PICO_DEFAULT_LED_PIN 23
+          #endif
+          #ifndef PICO_VSYS_PIN
+          #define PICO_VSYS_PIN 46
+          #endif
+
+          // --- Wireless Pins (CYW43 / RM2) ---
+          #ifndef CYW43_WL_GPIO_COUNT
+          #define CYW43_WL_GPIO_COUNT 3
+          #endif
+          #ifndef CYW43_WL_GPIO_LED_PIN
+          #define CYW43_WL_GPIO_LED_PIN 0
+          #endif
+          #ifndef CYW43_DEFAULT_PIN_WL_REG_ON
+          #define CYW43_DEFAULT_PIN_WL_REG_ON 36u
+          #endif
+          #ifndef CYW43_DEFAULT_PIN_WL_DATA_OUT
+          #define CYW43_DEFAULT_PIN_WL_DATA_OUT 37u
+          #endif
+          #ifndef CYW43_DEFAULT_PIN_WL_CLOCK
+          #define CYW43_DEFAULT_PIN_WL_CLOCK 39u
+          #endif
+          #ifndef CYW43_DEFAULT_PIN_WL_CS
+          #define CYW43_DEFAULT_PIN_WL_CS 38u
+          #endif
+
+          #ifndef PICO_RP2350_A2_SUPPORTED
+          #define PICO_RP2350_A2_SUPPORTED 1
+          #endif
+          #endif
+          EOF
+
+      - name: Apply Overclock Patch (360MHz @ 1.25V)
+        run: |
+          if [ -f src/main.c ]; then
+            sed -i 's/VREG_VOLTAGE_1_20/VREG_VOLTAGE_1_25/g' src/main.c
+            sed -i 's/320000/360000/g' src/main.c
+            echo "Successfully patched main.c for 360MHz @ 1.25V"
+          fi
+
+      - name: Build Extreme Performance UF2 (Hardware Stripped)
+        run: |
+          # Added flags to disable Serial, and aggressively unroll logic
+          cmake -S . -B build/extreme -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_BOARD=waveshare_rp2350b_plus_w \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DENABLE_SERIAL=OFF \
+            -DENABLE_VERBOSE=OFF \
+            -DCMAKE_C_FLAGS="-O3 -ffast-math -funroll-loops -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables" \
+            -DCMAKE_CXX_FLAGS="-O3 -ffast-math -funroll-loops -fno-exceptions -fno-unwind-tables -fno-asynchronous-unwind-tables"
+          cmake --build build/extreme --target ds5-bridge
+          
+          mkdir -p artifacts
+          cp build/extreme/ds5-bridge.uf2 artifacts/ds5-bridge-waveshare-extreme.uf2
+
+      - name: Upload Extreme UF2
+        uses: actions/upload-artifact@v7
+        with:
+          name: ds5-bridge-waveshare-extreme
+          path: artifacts/ds5-bridge-waveshare-extreme.uf2
+          archive: false
+          if-no-files-found: error
