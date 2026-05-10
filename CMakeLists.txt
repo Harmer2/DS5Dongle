@@ -108,3 +108,5 @@ target_link_libraries(ds5-bridge
 )
 
 pico_add_extra_outputs(ds5-bridge)
+
+# Clean UI
