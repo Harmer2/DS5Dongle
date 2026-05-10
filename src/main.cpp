@@ -21,6 +21,9 @@
 
 #include "pico/critical_section.h"
 
+// --- FIX: Declare set_state_data so main.cpp knows it exists in audio.cpp ---
+extern void set_state_data(const uint8_t* data, const uint8_t len);
+
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
 bool spk_active = false;
