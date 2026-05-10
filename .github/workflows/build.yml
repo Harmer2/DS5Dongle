@@ -77,113 +77,104 @@ jobs:
 
       - name: Inject Waveshare RP2350B-Plus-W board header
         run: |
-          cat > "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h" << 'EOF'
-          #ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
-          #define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
-          pico_board_cmake_set(PICO_PLATFORM, rp2350)
-          pico_board_cmake_set(PICO_CYW43_SUPPORTED, 1)
-
-          // --- FLASH: 16MB W25Q128 ---
-          #define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
-          #ifndef PICO_FLASH_SPI_CLKDIV
-          // CLKDIV 6: at 320 MHz -> 53 MHz flash, at 360 MHz -> 60 MHz flash
-          // Both safely under W25Q128's 80 MHz max.
-          // Previous CLKDIV 2 was 160 MHz at 320 MHz — dangerously over spec.
-          #define PICO_FLASH_SPI_CLKDIV 6
-          #endif
-          #ifndef PICO_FLASH_SIZE_BYTES
-          #define PICO_FLASH_SIZE_BYTES (16 * 1024 * 1024)
-          #endif
-
-          // --- LED ---
-          #ifndef PICO_DEFAULT_LED_PIN
-          #define PICO_DEFAULT_LED_PIN 23
-          #endif
-
-          // --- UART ---
-          #ifndef PICO_DEFAULT_UART
-          #define PICO_DEFAULT_UART 0
-          #endif
-          #ifndef PICO_DEFAULT_UART_TX_PIN
-          #define PICO_DEFAULT_UART_TX_PIN 0
-          #endif
-          #ifndef PICO_DEFAULT_UART_RX_PIN
-          #define PICO_DEFAULT_UART_RX_PIN 1
-          #endif
-
-          // --- I2C ---
-          #ifndef PICO_DEFAULT_I2C
-          #define PICO_DEFAULT_I2C 1
-          #endif
-          #ifndef PICO_DEFAULT_I2C_SDA_PIN
-          #define PICO_DEFAULT_I2C_SDA_PIN 6
-          #endif
-          #ifndef PICO_DEFAULT_I2C_SCL_PIN
-          #define PICO_DEFAULT_I2C_SCL_PIN 7
-          #endif
-
-          // --- SPI ---
-          #ifndef PICO_DEFAULT_SPI
-          #define PICO_DEFAULT_SPI 0
-          #endif
-          #ifndef PICO_DEFAULT_SPI_SCK_PIN
-          #define PICO_DEFAULT_SPI_SCK_PIN 18
-          #endif
-          #ifndef PICO_DEFAULT_SPI_TX_PIN
-          #define PICO_DEFAULT_SPI_TX_PIN 19
-          #endif
-          #ifndef PICO_DEFAULT_SPI_RX_PIN
-          #define PICO_DEFAULT_SPI_RX_PIN 16
-          #endif
-          #ifndef PICO_DEFAULT_SPI_CSN_PIN
-          #define PICO_DEFAULT_SPI_CSN_PIN 17
-          #endif
-
-          // --- VSYS ---
-          #ifndef PICO_VSYS_PIN
-          #define PICO_VSYS_PIN 46
-          #endif
-
-          // --- CYW43 / RM2 pins ---
-          #ifndef CYW43_WL_GPIO_COUNT
-          #define CYW43_WL_GPIO_COUNT 3
-          #endif
-          #ifndef CYW43_WL_GPIO_LED_PIN
-          #define CYW43_WL_GPIO_LED_PIN 0
-          #endif
-          #ifndef CYW43_WL_GPIO_SMPS_PIN
-          #define CYW43_WL_GPIO_SMPS_PIN 1
-          #endif
-          #ifndef CYW43_WL_GPIO_VBUS_PIN
-          #define CYW43_WL_GPIO_VBUS_PIN 2
-          #endif
-          #ifndef CYW43_PIN_WL_DYNAMIC
-          #define CYW43_PIN_WL_DYNAMIC 0
-          #endif
-          #ifndef CYW43_DEFAULT_PIN_WL_REG_ON
-          #define CYW43_DEFAULT_PIN_WL_REG_ON 36u
-          #endif
-          #ifndef CYW43_DEFAULT_PIN_WL_DATA_OUT
-          #define CYW43_DEFAULT_PIN_WL_DATA_OUT 37u
-          #endif
-          #ifndef CYW43_DEFAULT_PIN_WL_DATA_IN
-          #define CYW43_DEFAULT_PIN_WL_DATA_IN 37u
-          #endif
-          #ifndef CYW43_DEFAULT_PIN_WL_HOST_WAKE
-          #define CYW43_DEFAULT_PIN_WL_HOST_WAKE 37u
-          #endif
-          #ifndef CYW43_DEFAULT_PIN_WL_CLOCK
-          #define CYW43_DEFAULT_PIN_WL_CLOCK 39u
-          #endif
-          #ifndef CYW43_DEFAULT_PIN_WL_CS
-          #define CYW43_DEFAULT_PIN_WL_CS 38u
-          #endif
-
-          #ifndef PICO_RP2350_A2_SUPPORTED
-          #define PICO_RP2350_A2_SUPPORTED 1
-          #endif
-          #endif
-          EOF
+          BOARD_HEADER="$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
+          cat > "$BOARD_HEADER" << 'BOARDEOF'
+#ifndef _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+#define _BOARDS_WAVESHARE_RP2350B_PLUS_W_H
+pico_board_cmake_set(PICO_PLATFORM, rp2350)
+pico_board_cmake_set(PICO_CYW43_SUPPORTED, 1)
+// --- FLASH: 16MB W25Q128 ---
+#define PICO_BOOT_STAGE2_CHOOSE_W25Q080 1
+#ifndef PICO_FLASH_SPI_CLKDIV
+// CLKDIV 6: 53 MHz flash at 320 MHz, 60 MHz at 360 MHz — both under W25Q128 80 MHz max
+#define PICO_FLASH_SPI_CLKDIV 6
+#endif
+#ifndef PICO_FLASH_SIZE_BYTES
+#define PICO_FLASH_SIZE_BYTES (16 * 1024 * 1024)
+#endif
+// --- LED ---
+#ifndef PICO_DEFAULT_LED_PIN
+#define PICO_DEFAULT_LED_PIN 23
+#endif
+// --- UART ---
+#ifndef PICO_DEFAULT_UART
+#define PICO_DEFAULT_UART 0
+#endif
+#ifndef PICO_DEFAULT_UART_TX_PIN
+#define PICO_DEFAULT_UART_TX_PIN 0
+#endif
+#ifndef PICO_DEFAULT_UART_RX_PIN
+#define PICO_DEFAULT_UART_RX_PIN 1
+#endif
+// --- I2C ---
+#ifndef PICO_DEFAULT_I2C
+#define PICO_DEFAULT_I2C 1
+#endif
+#ifndef PICO_DEFAULT_I2C_SDA_PIN
+#define PICO_DEFAULT_I2C_SDA_PIN 6
+#endif
+#ifndef PICO_DEFAULT_I2C_SCL_PIN
+#define PICO_DEFAULT_I2C_SCL_PIN 7
+#endif
+// --- SPI ---
+#ifndef PICO_DEFAULT_SPI
+#define PICO_DEFAULT_SPI 0
+#endif
+#ifndef PICO_DEFAULT_SPI_SCK_PIN
+#define PICO_DEFAULT_SPI_SCK_PIN 18
+#endif
+#ifndef PICO_DEFAULT_SPI_TX_PIN
+#define PICO_DEFAULT_SPI_TX_PIN 19
+#endif
+#ifndef PICO_DEFAULT_SPI_RX_PIN
+#define PICO_DEFAULT_SPI_RX_PIN 16
+#endif
+#ifndef PICO_DEFAULT_SPI_CSN_PIN
+#define PICO_DEFAULT_SPI_CSN_PIN 17
+#endif
+// --- VSYS ---
+#ifndef PICO_VSYS_PIN
+#define PICO_VSYS_PIN 46
+#endif
+// --- CYW43 / RM2 pins ---
+#ifndef CYW43_WL_GPIO_COUNT
+#define CYW43_WL_GPIO_COUNT 3
+#endif
+#ifndef CYW43_WL_GPIO_LED_PIN
+#define CYW43_WL_GPIO_LED_PIN 0
+#endif
+#ifndef CYW43_WL_GPIO_SMPS_PIN
+#define CYW43_WL_GPIO_SMPS_PIN 1
+#endif
+#ifndef CYW43_WL_GPIO_VBUS_PIN
+#define CYW43_WL_GPIO_VBUS_PIN 2
+#endif
+#ifndef CYW43_PIN_WL_DYNAMIC
+#define CYW43_PIN_WL_DYNAMIC 0
+#endif
+#ifndef CYW43_DEFAULT_PIN_WL_REG_ON
+#define CYW43_DEFAULT_PIN_WL_REG_ON 36u
+#endif
+#ifndef CYW43_DEFAULT_PIN_WL_DATA_OUT
+#define CYW43_DEFAULT_PIN_WL_DATA_OUT 37u
+#endif
+#ifndef CYW43_DEFAULT_PIN_WL_DATA_IN
+#define CYW43_DEFAULT_PIN_WL_DATA_IN 37u
+#endif
+#ifndef CYW43_DEFAULT_PIN_WL_HOST_WAKE
+#define CYW43_DEFAULT_PIN_WL_HOST_WAKE 37u
+#endif
+#ifndef CYW43_DEFAULT_PIN_WL_CLOCK
+#define CYW43_DEFAULT_PIN_WL_CLOCK 39u
+#endif
+#ifndef CYW43_DEFAULT_PIN_WL_CS
+#define CYW43_DEFAULT_PIN_WL_CS 38u
+#endif
+#ifndef PICO_RP2350_A2_SUPPORTED
+#define PICO_RP2350_A2_SUPPORTED 1
+#endif
+#endif
+BOARDEOF
 
       - name: Patch CMakeLists.txt for Waveshare board
         run: |
@@ -193,6 +184,8 @@ jobs:
         run: |
           echo "=== Board header CLKDIV line ==="
           grep "CLKDIV" "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
+          echo "=== First 5 lines of board header ==="
+          head -5 "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
           echo "=== CMakeLists PICO_BOARD line ==="
           grep "PICO_BOARD" CMakeLists.txt
 
