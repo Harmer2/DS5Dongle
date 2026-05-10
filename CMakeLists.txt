@@ -1,15 +1,9 @@
-# Generated Cmake Pico project file
-
 cmake_minimum_required(VERSION 3.13)
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Initialise pico_sdk from installed location
-# (note this can come from environment, CMake cache etc)
-
-# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
 if (WIN32)
     set(USERHOME $ENV{USERPROFILE})
 else ()
@@ -22,28 +16,34 @@ set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
 if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif ()
-# ====================================================================================
-set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
-#set(PICO_CYW43_SUPPORTED 1)
-#set(PICO_CYW43_ARCH_THREADSAFE_BACKGROUND 1)
+set(PICO_BOARD pico2_w CACHE STRING "Board type")
 
 option(ENABLE_SERIAL "Enable USB CDC serial printf output" OFF)
 if (ENABLE_SERIAL)
-        set(ENABLE_SERIAL_VALUE 1)
+    set(ENABLE_SERIAL_VALUE 1)
 else ()
-        set(ENABLE_SERIAL_VALUE 0)
+    set(ENABLE_SERIAL_VALUE 0)
 endif ()
 
-# Pull in Raspberry Pi Pico SDK (must be before project)
+option(ENABLE_VERBOSE "Enable Log Verbose" OFF)
+if (ENABLE_VERBOSE)
+    set(ENABLE_VERBOSE_VALUE 1)
+else ()
+    set(ENABLE_VERBOSE_VALUE 0)
+endif ()
+
+# Opus encoder complexity: 0=lowest CPU, 10=highest quality
+# Passed via cmake -DOPUS_COMPLEXITY=2
+if (NOT DEFINED OPUS_COMPLEXITY)
+    set(OPUS_COMPLEXITY 0)
+endif ()
+
 include(pico_sdk_import.cmake)
 
 project(ds5-bridge C CXX ASM)
 
-# Initialise the Raspberry Pi Pico SDK
 pico_sdk_init()
-
-# Add executable. Default name is the project name, version 0.1
 
 add_executable(ds5-bridge
         src/usb_descriptors.cpp
@@ -55,7 +55,6 @@ add_executable(ds5-bridge
         src/cmd.cpp
 )
 
-# Cockos WDLResampler
 add_library(wdl_resampler STATIC
         lib/WDL/WDL/resample.cpp
 )
@@ -63,12 +62,11 @@ target_include_directories(wdl_resampler PUBLIC
         lib/WDL/WDL
 )
 
-# Opus
-#set(OPUS_FIXED_POINT ON)
 add_subdirectory(lib/opus)
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
 target_compile_options(ds5-bridge PRIVATE -fsigned-char)
+
 target_compile_definitions(wdl_resampler PRIVATE
         WDL_RESAMPLE_TYPE=float
 )
@@ -81,25 +79,20 @@ target_compile_definitions(ds5-bridge PRIVATE
         PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=0
+        ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
+        OPUS_COMPLEXITY=${OPUS_COMPLEXITY}
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
 pico_set_program_version(ds5-bridge "0.5.3")
 
-# Modify the below lines to enable/disable output over UART/USB
 pico_enable_stdio_uart(ds5-bridge 1)
 pico_enable_stdio_usb(ds5-bridge ${ENABLE_SERIAL_VALUE})
-
-# Add the standard include files to the build
-#target_include_directories(ds5-bridge PRIVATE
-#        ${CMAKE_CURRENT_LIST_DIR}
-#)
 
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-# Add any user requested libraries
 target_link_libraries(ds5-bridge
         pico_stdlib
         pico_multicore
@@ -107,7 +100,6 @@ target_link_libraries(ds5-bridge
         hardware_timer
         hardware_flash
         pico_btstack_classic
-#        pico_cyw43_arch_threadsafe_background
         pico_cyw43_arch_poll
         pico_btstack_cyw43
         tinyusb_device
@@ -117,4 +109,3 @@ target_link_libraries(ds5-bridge
 )
 
 pico_add_extra_outputs(ds5-bridge)
-
