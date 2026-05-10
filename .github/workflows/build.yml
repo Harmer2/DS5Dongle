@@ -80,24 +80,12 @@ jobs:
           cp boards/waveshare_rp2350b_plus_w.h \
             "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
 
-      - name: Patch CMakeLists.txt for Waveshare board
-        run: |
-          sed -i 's/set(PICO_BOARD pico2_w[^)]*)/set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")/' CMakeLists.txt
-
-      - name: Verify patch
-        run: |
-          echo "=== Board header CLKDIV line ==="
-          grep "CLKDIV" "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
-          echo "=== First 5 lines of board header ==="
-          head -5 "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
-          echo "=== CMakeLists PICO_BOARD line ==="
-          grep "PICO_BOARD" CMakeLists.txt
-
       - name: Build standard firmware (360 MHz, Opus complexity 2)
         run: |
           cmake -S . -B build/standard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DPICO_BOARD=waveshare_rp2350b_plus_w \
             -DOPUS_COMPLEXITY=2
           cmake --build build/standard --target ds5-bridge
           mkdir -p artifacts
@@ -108,6 +96,7 @@ jobs:
           cmake -S . -B build/debug -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DPICO_BOARD=waveshare_rp2350b_plus_w \
             -DENABLE_SERIAL=ON \
             -DENABLE_VERBOSE=ON \
             -DOPUS_COMPLEXITY=2
