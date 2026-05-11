@@ -163,16 +163,23 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case GAP_EVENT_INQUIRY_COMPLETE:
-        case HCI_EVENT_INQUIRY_COMPLETE: {
-            printf("[HCI] Inquiry complete\n");
-            if (device_found) {
-                printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
-                new_pair = true;
-                hci_send_cmd(&hci_create_connection, current_device_addr,
-                             hci_usable_acl_packet_types(), 0, 0, 0, 1);
-            }
-            break;
-        }
+case HCI_EVENT_INQUIRY_COMPLETE: {
+    printf("[HCI] Inquiry complete\n");
+    if (device_found) {
+        printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
+        new_pair = true;
+        hci_send_cmd(&hci_create_connection, current_device_addr,
+                     hci_usable_acl_packet_types(), 0, 0, 0, 1);
+        break;
+    }
+    if (event_type == HCI_EVENT_INQUIRY_COMPLETE) {
+        printf("[HCI] Restart inquiry\n");
+        gap_inquiry_start(30);
+        gap_connectable_control(1);
+        gap_discoverable_control(1);
+    }
+    break;
+}
         case HCI_EVENT_COMMAND_STATUS: {
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
