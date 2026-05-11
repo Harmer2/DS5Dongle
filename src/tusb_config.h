@@ -27,13 +27,17 @@ extern "C" {
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_RX 2
 #define CFG_TUD_AUDIO_FUNC_1_N_BYTES_PER_SAMPLE_TX 2
 
-// Endpoint sizes - use FUNC_1_ prefix (TinyUSB SDK 2.2.0 requirement)
+// Endpoint buffer sizes (define both variants for compatibility)
+#define CFG_TUD_AUDIO_EP_SZ_IN 196
+#define CFG_TUD_AUDIO_EP_SZ_OUT 392
 #define CFG_TUD_AUDIO_FUNC_1_EP_SZ_IN 196
 #define CFG_TUD_AUDIO_FUNC_1_EP_SZ_OUT 392
+
+// Software FIFO sizes
 #define CFG_TUD_AUDIO_FUNC_1_EP_OUT_SW_BUF_SZ (392 * 6)
 #define CFG_TUD_AUDIO_FUNC_1_EP_IN_SW_BUF_SZ (196 * 4)
 
-// Control flags
+// Audio control flags
 #define CFG_TUD_AUDIO_ENABLE_FEEDBACK_EP 1
 #define CFG_TUD_AUDIO_ENABLE_EP_OUT 1
 #define CFG_TUD_AUDIO_ENABLE_EP_IN 1
