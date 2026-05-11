@@ -8,7 +8,6 @@ on:
 
 env:
   PICO_SDK_REF: 2.2.0
-  TINYUSB_REF: 0.20.0
   PICO_SDK_PATH: ${{ github.workspace }}/pico-sdk
   APT_PACKAGES: >-
     cmake
@@ -29,6 +28,17 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      - name: Verify library submodules
+        run: |
+          for dir in lib/opus lib/WDL; do
+            if [ ! -f "$dir/CMakeLists.txt" ] && [ ! -f "$dir/Makefile" ]; then
+              echo "ERROR: $dir appears empty — check .gitmodules"
+              ls -la "$dir" || true
+              exit 1
+            fi
+          done
+          echo "Submodules OK"
 
       - name: Prepare build dependency cache
         id: apt-cache
@@ -60,7 +70,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ env.PICO_SDK_PATH }}
-          key: ${{ runner.os }}-${{ runner.arch }}-pico-sdk-${{ env.PICO_SDK_REF }}-tinyusb-${{ env.TINYUSB_REF }}
+          key: ${{ runner.os }}-${{ runner.arch }}-pico-sdk-${{ env.PICO_SDK_REF }}
 
       - name: Download Pico SDK
         if: steps.cache-pico-sdk.outputs.cache-hit != 'true'
@@ -68,40 +78,34 @@ jobs:
           git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
           git -C "$PICO_SDK_PATH" submodule update --init --recursive
 
-      - name: Switch TinyUSB to configured tag
-        run: |
-          if ! git -C "$PICO_SDK_PATH/lib/tinyusb" rev-parse -q --verify "refs/tags/$TINYUSB_REF" >/dev/null; then
-            git -C "$PICO_SDK_PATH/lib/tinyusb" fetch --depth 1 origin "refs/tags/$TINYUSB_REF:refs/tags/$TINYUSB_REF"
-          fi
-          git -C "$PICO_SDK_PATH/lib/tinyusb" checkout --detach "$TINYUSB_REF"
+      - name: Compute board header hash
+        id: board-hash
+        run: echo "hash=$(sha256sum boards/waveshare_rp2350b_plus_w.h | cut -d ' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - name: Inject Waveshare RP2350B-Plus-W board header
-        run: |
-          cp boards/waveshare_rp2350b_plus_w.h \
-            "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
-
-      # ── Standard firmware (360 MHz, Opus complexity 2, optimised defaults) ──
+      # ── Standard firmware ───────────────────────────────────────────────────
       - name: Build standard firmware
         run: |
           cmake -S . -B build/standard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DPICO_BOARD=waveshare_rp2350b_plus_w \
-            -DOPUS_COMPLEXITY=2
+            -DPICO_BOARD_HEADER_DIRS="${{ github.workspace }}/boards" \
+            -DOPUS_COMPLEXITY=4
           cmake --build build/standard --target ds5-bridge
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
 
-      # ── Debug firmware (serial + verbose logging) ────────────────────────────
+      # ── Debug firmware ──────────────────────────────────────────────────────
       - name: Build debug firmware
         run: |
           cmake -S . -B build/debug -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DPICO_BOARD=waveshare_rp2350b_plus_w \
+            -DPICO_BOARD_HEADER_DIRS="${{ github.workspace }}/boards" \
             -DENABLE_SERIAL=ON \
             -DENABLE_VERBOSE=ON \
-            -DOPUS_COMPLEXITY=2
+            -DOPUS_COMPLEXITY=4
           cmake --build build/debug --target ds5-bridge
           cp build/debug/ds5-bridge.uf2 artifacts/ds5-bridge-debug.uf2
 
