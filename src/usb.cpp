@@ -50,7 +50,7 @@ extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
     (void)instance;
 
     if (report_type == HID_REPORT_TYPE_FEATURE) {
-        return cmd_get_feature_report(report_id, buffer, reqlen);
+        return pico_cmd_get(report_id, buffer, reqlen);
     }
 
     if (report_type == HID_REPORT_TYPE_INPUT && report_id == 0x01) {
@@ -68,7 +68,7 @@ extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
     (void)instance;
 
     if (report_type == HID_REPORT_TYPE_FEATURE) {
-        cmd_set_feature_report(report_id, buffer, bufsize);
+        pico_cmd_set(report_id, buffer, bufsize);
         return;
     }
 
