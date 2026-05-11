@@ -26,6 +26,7 @@
 #include "bsp/board_api.h"
 #include "tusb.h"
 #include "config.h"
+static bool is_dse = false;  // Add this global variable
 
 #ifndef ENABLE_SERIAL
 #define ENABLE_SERIAL 0
@@ -393,7 +394,7 @@ uint8_t descriptor_configuration[] = {
 uint8_t const *tud_descriptor_configuration_cb(uint8_t index) {
     (void) index; // for multiple configurations
     auto bInterval = 0x01;
-    switch (get_config().polling_rate_mode) {
+    switch (get_config().polling_rate) {
         case 0:
             bInterval = 0x04;
             break;
