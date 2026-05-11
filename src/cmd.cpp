@@ -63,7 +63,11 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
     if (report_id == 0xf6) {
         if (buffer[0] == 0x01) {
             printf("[CMD] 0xf6/0x01 config set\n");
-            set_config(buffer + 1, bufsize - 1);
+            if (bufsize >= sizeof(config_t) + 1) {
+    config_t cfg;
+    memcpy(&cfg, buffer + 1, sizeof(config_t));
+    set_config(cfg);
+}
         }
         if (buffer[0] == 0x02) {
             printf("[CMD] 0xf6/0x02 config save\n");
