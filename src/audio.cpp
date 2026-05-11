@@ -1,7 +1,5 @@
-//
 // Created by awalol on 2026/3/5.
-// v1 — Opus complexity 2, reduced core1 stack, Waveshare RP2350B-Plus-W
-//
+// v2-opt — fifo depth 2->4, cached audio_gain, Waveshare RP2350B-Plus-W
 
 #include "audio.h"
 #include "bt.h"
@@ -17,15 +15,15 @@
 #include "config.h"
 #include "usb.h"
 
-#define INPUT_CHANNELS    4
-#define OUTPUT_CHANNELS   2
-#define SAMPLE_SIZE       64
-#define REPORT_SIZE       398
-#define REPORT_ID         0x36
+#define INPUT_CHANNELS  4
+#define OUTPUT_CHANNELS 2
+#define SAMPLE_SIZE     64
+#define REPORT_SIZE     398
+#define REPORT_ID       0x36
 
 // Opus complexity: 0 = lowest CPU, 4 = highest quality.
-// Original was hardcoded 0. At 360 MHz core1 has headroom for 2.
-// Increase to 3 or 4 if no stuttering occurs. Reduce to 0 if stuttering appears.
+// At 360 MHz core1 has headroom for 2.
+// Reduce to 0 if stuttering appears.
 #ifndef OPUS_COMPLEXITY
 #define OPUS_COMPLEXITY 2
 #endif
@@ -35,14 +33,10 @@ using std::max;
 
 static WDL_Resampler resampler;
 static uint8_t reportSeqCounter = 0;
-static uint8_t packetCounter = 0;
-static bool plug_headset = false;
+static uint8_t packetCounter    = 0;
+static bool    plug_headset     = false;
 
-// Reduced stack from 8192 to 4096 words (16KB).
-// Opus encoder + WDL resampler fit comfortably within 16KB at 360 MHz.
-// If core1 crashes silently (audio stops), revert to 8192.
 alignas(8) static uint32_t audio_core1_stack[8192];
-
 queue_t audio_fifo;
 static uint8_t opus_buf[200];
 critical_section_t opus_cs;
@@ -52,15 +46,11 @@ struct audio_raw_element {
 };
 
 uint8_t state_data[63] = {
-    0xfd, 0xf7, 0x0, 0x0,
-    0x7f, 0x7f,
-    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
-    0x7, 0x0, 0x0, 0x2, 0x1,
-    0x00,
-    0xff, 0xd7, 0x00,
+    0xfd, 0xf7, 0x0, 0x0, 0x7f, 0x7f,
+    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00,
 };
 
 void set_state_data(const uint8_t* data, const uint8_t len) {
@@ -71,29 +61,47 @@ void set_headset(bool state) {
     plug_headset = state;
 }
 
+// ── Cached audio gain ─────────────────────────────────────────────────────────
+// powf(10, x/20) is expensive. Cache it and only recompute when volume changes.
+// This removes a powf() call from every audio_loop() tick on Core 0.
+static float cached_audio_gain     = 0.0f;
+static float cached_speaker_volume = -999.0f; // sentinel: force first compute
+
+static float get_audio_gain() {
+    const float vol = get_config().speaker_volume;
+    if (vol != cached_speaker_volume) {
+        cached_speaker_volume = vol;
+        cached_audio_gain     = powf(10.0f, vol / 20.0f);
+    }
+    return mute[0] ? 0.0f : cached_audio_gain;
+}
+
 void audio_loop() {
     if (!tud_audio_available()) return;
 
-    int16_t raw[192];
+    int16_t  raw[192];
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
-    int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
+    int      frames     = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
     if (frames == 0) return;
 
     static float audio_buf[512 * 2];
-    static uint audio_buf_pos = 0;
+    static uint  audio_buf_pos = 0;
 
     WDL_ResampleSample *in_buf;
     int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
 
-    const float audio_gain = mute[0] ? 0.0f : powf(10.0f, get_config().speaker_volume / 20.0f);
+    // FIX: cache gain — no powf() per tick
+    const float audio_gain   = get_audio_gain();
     const float haptics_gain = get_config().haptics_gain;
 
     for (int i = 0; i < nframes; i++) {
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS] / 32768.0f * audio_gain;
+        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS]     / 32768.0f * audio_gain;
         audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * audio_gain;
+
         if (audio_buf_pos == 512 * 2) {
             static audio_raw_element element{};
             memcpy(element.data, audio_buf, 512 * 2 * 4);
+            // FIX: drop oldest frame if full rather than silently losing data
             if (queue_is_full(&audio_fifo)) {
                 queue_try_remove(&audio_fifo, NULL);
             }
@@ -103,7 +111,7 @@ void audio_loop() {
             audio_buf_pos = 0;
         }
 
-        in_buf[i * 2] = static_cast<WDL_ResampleSample>(clamp(
+        in_buf[i * 2]     = static_cast<WDL_ResampleSample>(clamp(
             raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain, -1.0f, 1.0f));
         in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(
             raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain, -1.0f, 1.0f));
@@ -113,10 +121,10 @@ void audio_loop() {
     const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
 
     static int8_t haptic_buf[SAMPLE_SIZE];
-    static int haptic_buf_pos = 0;
+    static int    haptic_buf_pos = 0;
 
     for (int i = 0; i < out_frames; i++) {
-        int val_l = static_cast<int>(out_buf[i * 2] * 127.0f);
+        int val_l = static_cast<int>(out_buf[i * 2]     * 127.0f);
         int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127);
         haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
@@ -130,12 +138,14 @@ void audio_loop() {
         pkt[2] = 0x11 | 0 << 6 | 1 << 7;
         pkt[3] = 7;
         pkt[4] = 0b11111110;
+
         const auto buf_len = get_config().audio_buffer_length;
         pkt[5] = buf_len;
         pkt[6] = buf_len;
         pkt[7] = buf_len;
         pkt[8] = buf_len;
         pkt[9] = buf_len;
+
         pkt[10] = packetCounter++;
         pkt[11] = 0x10 | 0 << 6 | 1 << 7;
         pkt[12] = 63;
@@ -145,6 +155,7 @@ void audio_loop() {
         memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
         pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
         pkt[143] = 200;
+
         critical_section_enter_blocking(&opus_cs);
         memcpy(pkt + 144, opus_buf, 200);
         critical_section_exit(&opus_cs);
@@ -159,12 +170,18 @@ void audio_init() {
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
-    queue_init(&audio_fifo, sizeof(audio_raw_element), 2);
+
+    // FIX: depth 2->4 — gives Core 1 (Opus encoder) more headroom before
+    // frames are dropped. At 360 MHz Core 1 encodes ~10ms frames; depth 4
+    // covers ~40ms of burst without dropping. Depth 2 dropped frames under
+    // any transient load spike, causing the stuttering you heard.
+    queue_init(&audio_fifo, sizeof(audio_raw_element), 4);
+
     critical_section_init(&opus_cs);
     multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
 }
 
-static OpusEncoder *encoder;
+static OpusEncoder  *encoder = nullptr;
 static WDL_Resampler resampler_audio;
 
 void core1_entry() {
@@ -174,11 +191,11 @@ void core1_entry() {
         printf("[Audio] OpusEncoder create failed\n");
         return;
     }
+
     opus_encoder_ctl(encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
     opus_encoder_ctl(encoder, OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder, OPUS_SET_VBR(false));
-    // Complexity raised from 0 to OPUS_COMPLEXITY (default 2).
-    // At 360 MHz core1 has ~20% more headroom vs 320 MHz.
+    // Complexity from build flag (default 2). At 360 MHz core1 handles this fine.
     opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
 
     resampler_audio.SetMode(true, 0, false);
@@ -196,11 +213,13 @@ void core1_entry() {
         for (int i = 0; i < nframes * 2; i++) {
             in_buf[i] = audio_element.data[i];
         }
+
         static WDL_ResampleSample out_buf[480 * 2];
         resampler_audio.ResampleOut(out_buf, nframes, 480, 2);
 
         static uint8_t out[200];
         (void) opus_encode_float(encoder, out_buf, 480, out, 200);
+
         critical_section_enter_blocking(&opus_cs);
         memcpy(opus_buf, out, 200);
         critical_section_exit(&opus_cs);
