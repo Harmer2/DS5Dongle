@@ -17,7 +17,7 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif ()
 
-set(PICO_BOARD pico2_w CACHE STRING "Board type")
+set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")
 
 option(ENABLE_SERIAL "Enable USB CDC serial printf output" OFF)
 if (ENABLE_SERIAL)
@@ -34,7 +34,6 @@ else ()
 endif ()
 
 # Blink onboard LED at 1Hz when DualSense battery <= 10% and discharging.
-# ON by default. Pass -DENABLE_BATT_LED=OFF to disable.
 option(ENABLE_BATT_LED "Blink Pico LED when DualSense battery is low (<=10%)" ON)
 if (ENABLE_BATT_LED)
     set(ENABLE_BATT_LED_VALUE 1)
@@ -43,7 +42,7 @@ else ()
 endif ()
 
 # Opus encoder complexity: 0=lowest CPU, 10=highest quality
-set(OPUS_COMPLEXITY 0 CACHE STRING "Opus encoder complexity (0-10)")
+set(OPUS_COMPLEXITY 4 CACHE STRING "Opus encoder complexity (0-10)")
 
 include(pico_sdk_import.cmake)
 
@@ -73,6 +72,19 @@ target_include_directories(wdl_resampler PUBLIC
         lib/WDL/WDL
 )
 
+# ── Opus configuration (disable DNN features, fixed-point for Cortex-M33) ──
+set(OPUS_DISABLE_DEEP_PLC ON CACHE BOOL "" FORCE)
+set(OPUS_DISABLE_DRED ON CACHE BOOL "" FORCE)
+set(OPUS_DISABLE_OSCE ON CACHE BOOL "" FORCE)
+set(OPUS_FIXED_POINT ON CACHE BOOL "" FORCE)
+set(OPUS_ENABLE_FLOAT_API OFF CACHE BOOL "" FORCE)
+set(OPUS_HARDENING OFF CACHE BOOL "" FORCE)
+set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(lib/opus)
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
@@ -111,6 +123,10 @@ target_link_libraries(ds5-bridge
         hardware_watchdog
         hardware_timer
         hardware_flash
+        hardware_vreg
+        hardware_clocks
+        hardware_pll
+        hardware_sync
         pico_btstack_classic
         pico_cyw43_arch_poll
         pico_btstack_cyw43
