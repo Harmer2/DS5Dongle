@@ -109,6 +109,12 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
                 if (!config_save()) {
                     printf("[CMD] Profile switch: active config save failed\n");
                 }
+                #define CONFIG_PROFILE_COUNT 8
+
+uint8_t profile_get_active(void);
+bool profile_load(uint8_t slot);
+bool profile_save(uint8_t slot);
+
             } else {
                 printf("[CMD] Profile switch: load slot %u failed\n", slot);
             }
