@@ -1,6 +1,7 @@
 //
 // Created by awalol on 2026/3/4.
-// v1 — 360 MHz + 1.25V, Waveshare RP2350B-Plus-W
+// v2 — 360 MHz + 1.25V, Waveshare RP2350B-Plus-W
+// v2-batt — added ENABLE_BATT_LED support
 //
 
 #include <cstdio>
@@ -18,10 +19,14 @@
 #endif
 #include "config.h"
 #include "cmd.h"
-
 #include "pico/critical_section.h"
 
-// --- FIX: Explicitly tell main.cpp that this function exists in audio.cpp ---
+#if ENABLE_BATT_LED
+#include "battery_led.h"
+#endif
+
+// battery_led.cpp reads interrupt_in_data[52] directly via extern.
+// set_state_data lives in audio.cpp.
 extern void set_state_data(const uint8_t* data, const uint8_t len);
 
 int reportSeqCounter = 0;
@@ -81,6 +86,9 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
 
         if (get_config().polling_rate_mode != 2) {
             memcpy(interrupt_in_data, data + 3, 63);
+#if ENABLE_BATT_LED
+            battery_led_note_report();
+#endif
             return;
         }
 
@@ -88,6 +96,10 @@ void on_bt_data(CHANNEL_TYPE channel, uint8_t *data, uint16_t len) {
         memcpy(interrupt_in_data, data + 3, 63);
         report_dirty = true;
         critical_section_exit(&report_cs);
+
+#if ENABLE_BATT_LED
+        battery_led_note_report();
+#endif
     }
 }
 
@@ -169,8 +181,6 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 
 int main() {
     // 1.25V required for stable 360 MHz on RP2350B.
-    // VREG_VOLTAGE_1_25 is within the Pico SDK enum (max: VREG_VOLTAGE_1_30).
-    // Flash CLKDIV 6 in board header gives 60 MHz at 360 MHz — under W25Q128's 80 MHz max.
     vreg_set_voltage(VREG_VOLTAGE_1_25);
     sleep_ms(1000);
     set_sys_clock_khz(360000, true);
@@ -194,6 +204,10 @@ int main() {
         return 1;
     }
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+
+#if ENABLE_BATT_LED
+    battery_led_init();
+#endif
 
 #if !ENABLE_SERIAL
     if (watchdog_caused_reboot()) {
@@ -228,5 +242,8 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
+#if ENABLE_BATT_LED
+        battery_led_tick();
+#endif
     }
 }
