@@ -17,7 +17,9 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif ()
 
-set(PICO_BOARD pico2_w CACHE STRING "Board type")
+# Use custom Waveshare board definition (has WiFi support)
+set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")
+set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards)
 
 option(ENABLE_SERIAL "Enable USB CDC serial printf output" OFF)
 if (ENABLE_SERIAL)
@@ -33,8 +35,6 @@ else ()
     set(ENABLE_VERBOSE_VALUE 0)
 endif ()
 
-# Blink onboard LED at 1Hz when DualSense battery <= 10% and discharging.
-# ON by default. Pass -DENABLE_BATT_LED=OFF to disable.
 option(ENABLE_BATT_LED "Blink Pico LED when DualSense battery is low (<=10%)" ON)
 if (ENABLE_BATT_LED)
     set(ENABLE_BATT_LED_VALUE 1)
@@ -42,8 +42,8 @@ else ()
     set(ENABLE_BATT_LED_VALUE 0)
 endif ()
 
-# Opus encoder complexity: 0=lowest CPU, 10=highest quality
-set(OPUS_COMPLEXITY 0 CACHE STRING "Opus encoder complexity (0-10)")
+# v3 optimization: complexity 4 (was 0 in v2) — better audio quality at 360 MHz
+set(OPUS_COMPLEXITY 4 CACHE STRING "Opus encoder complexity (0-10)")
 
 include(pico_sdk_import.cmake)
 
@@ -61,7 +61,6 @@ add_executable(ds5-bridge
         src/cmd.cpp
 )
 
-# battery_led.cpp is only compiled when ENABLE_BATT_LED is ON
 if (ENABLE_BATT_LED)
     target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
 endif ()
@@ -70,9 +69,22 @@ add_library(wdl_resampler STATIC
         lib/WDL/WDL/resample.cpp
 )
 target_include_directories(wdl_resampler PUBLIC
-        lib/WDL/WDL
+        lib/WDL
 )
 
+# Opus optimization flags (v3 addition)
+set(OPUS_DISABLE_DEEP_PLC ON CACHE BOOL "" FORCE)
+set(OPUS_DISABLE_DRED ON CACHE BOOL "" FORCE)
+set(OPUS_DISABLE_OSCE ON CACHE BOOL "" FORCE)
+set(OPUS_FIXED_POINT ON CACHE BOOL "" FORCE)
+set(OPUS_ENABLE_FLOAT_API OFF CACHE BOOL "" FORCE)
+set(OPUS_HARDENING OFF CACHE BOOL "" FORCE)
+set(OPUS_STACK_PROTECTOR OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_PKG_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_INSTALL_CMAKE_CONFIG_MODULE OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
+set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(lib/opus)
 
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
@@ -103,6 +115,7 @@ pico_enable_stdio_usb(ds5-bridge ${ENABLE_SERIAL_VALUE})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib/WDL
 )
 
 target_link_libraries(ds5-bridge
@@ -111,6 +124,10 @@ target_link_libraries(ds5-bridge
         hardware_watchdog
         hardware_timer
         hardware_flash
+        hardware_vreg
+        hardware_clocks
+        hardware_pll
+        hardware_sync
         pico_btstack_classic
         pico_cyw43_arch_poll
         pico_btstack_cyw43
