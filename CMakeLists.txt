@@ -17,7 +17,6 @@ if (EXISTS ${picoVscode})
     include(${picoVscode})
 endif ()
 
-# Use custom Waveshare board definition (has WiFi support)
 set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")
 set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards)
 
@@ -42,7 +41,6 @@ else ()
     set(ENABLE_BATT_LED_VALUE 0)
 endif ()
 
-# v3 optimization: complexity 4 (was 0 in v2) — better audio quality at 360 MHz
 set(OPUS_COMPLEXITY 4 CACHE STRING "Opus encoder complexity (0-10)")
 
 include(pico_sdk_import.cmake)
@@ -69,10 +67,10 @@ add_library(wdl_resampler STATIC
         lib/WDL/WDL/resample.cpp
 )
 target_include_directories(wdl_resampler PUBLIC
-        lib/WDL
+        lib/WDL/WDL
 )
 
-# Opus optimization flags (v3 addition)
+# Opus optimizations
 set(OPUS_DISABLE_DEEP_PLC ON CACHE BOOL "" FORCE)
 set(OPUS_DISABLE_DRED ON CACHE BOOL "" FORCE)
 set(OPUS_DISABLE_OSCE ON CACHE BOOL "" FORCE)
@@ -115,7 +113,6 @@ pico_enable_stdio_usb(ds5-bridge ${ENABLE_SERIAL_VALUE})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
-        ${CMAKE_CURRENT_SOURCE_DIR}/lib/WDL
 )
 
 target_link_libraries(ds5-bridge
