@@ -4,7 +4,7 @@
 //
 // Command protocol:
 //
-//   GET 0xf7                          → returns current Config_body (original)
+//   GET 0xf7                          → returns current config_t (original)
 //
 //   SET 0xf6, buf[0]=0x01             → set config in RAM
 //   SET 0xf6, buf[0]=0x02             → save config to flash (wear-level ring)
@@ -36,10 +36,10 @@ uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
     // Original: GET current config body
     if (report_id == 0xf7) {
         printf("[HID] 0xf7 GET config\n");
-     if (sizeof(config_t) > reqlen) {
-    printf("[Config] Warning: config_t larger than reqlen\n");
-}
-const auto len = std::min(sizeof(config_t), static_cast<size_t>(reqlen));
+        if (sizeof(config_t) > reqlen) {
+            printf("[Config] Warning: config_t larger than reqlen\n");
+        }
+        const auto len = std::min(sizeof(config_t), static_cast<size_t>(reqlen));
         memcpy(buffer, &get_config(), len);
         return static_cast<uint16_t>(len);
     }
@@ -64,10 +64,10 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
         if (buffer[0] == 0x01) {
             printf("[CMD] 0xf6/0x01 config set\n");
             if (bufsize >= sizeof(config_t) + 1) {
-    config_t cfg;
-    memcpy(&cfg, buffer + 1, sizeof(config_t));
-    set_config(cfg);
-}
+                config_t cfg;
+                memcpy(&cfg, buffer + 1, sizeof(config_t));
+                set_config(cfg);
+            }
         }
         if (buffer[0] == 0x02) {
             printf("[CMD] 0xf6/0x02 config save\n");
@@ -113,12 +113,6 @@ void pico_cmd_set(uint8_t report_id, uint8_t const *buffer, uint16_t bufsize) {
                 if (!config_save()) {
                     printf("[CMD] Profile switch: active config save failed\n");
                 }
-                #define CONFIG_PROFILE_COUNT 8
-
-uint8_t profile_get_active(void);
-bool profile_load(uint8_t slot);
-bool profile_save(uint8_t slot);
-
             } else {
                 printf("[CMD] Profile switch: load slot %u failed\n", slot);
             }
