@@ -1,6 +1,5 @@
-//
 // Created by awalol on 2026/5/4.
-// v1 — wear-levelling + multi-profile support
+// v2-opt — default audio_buffer_length 64->16, polling_rate_mode 0->2
 //
 // Flash layout (top of 16MB flash, working downward):
 //
@@ -31,10 +30,10 @@
 // ── Constants ────────────────────────────────────────────────────────────────
 
 constexpr uint32_t CONFIG_MAGIC   = 0x66ccff00;
-constexpr uint16_t CONFIG_VERSION = 2;  // bumped from 1: invalidates old single-sector layout
+constexpr uint16_t CONFIG_VERSION = 2;
 
 // 16 pages per sector (4096 / 256)
-constexpr uint32_t WL_PAGES       = FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE;
+constexpr uint32_t WL_PAGES = FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE;
 
 // Wear-level ring: last sector of flash
 constexpr uint32_t WL_FLASH_OFFSET = PICO_FLASH_SIZE_BYTES - FLASH_SECTOR_SIZE;
@@ -103,12 +102,19 @@ void config_valid() {
         printf("[Config] disable_pico_led invalid — reset\n");
     }
     if (b->polling_rate_mode > 2) {
-        b->polling_rate_mode = 0;
-        printf("[Config] polling_rate_mode invalid — reset\n");
+        // FIX: default to real-time mode (2) instead of 250Hz (0).
+        // Mode 2 sends input reports immediately when BT data arrives,
+        // eliminating the fixed 4ms polling delay that caused input lag.
+        b->polling_rate_mode = 2;
+        printf("[Config] polling_rate_mode invalid — reset to real-time\n");
     }
     if (b->audio_buffer_length < 16 || b->audio_buffer_length > 128) {
-        b->audio_buffer_length = 64;
-        printf("[Config] audio_buffer_length invalid — reset\n");
+        // FIX: default 64->16. Lower value = less audio delay on the DualSense.
+        // 64 told the controller to buffer ~64 frames before playing,
+        // which was the primary cause of the audio lag you heard.
+        // 16 is the minimum allowed; increase to 24-32 if you get dropouts.
+        b->audio_buffer_length = 16;
+        printf("[Config] audio_buffer_length invalid — reset to 16\n");
     }
     if (b->controller_mode > 2) {
         b->controller_mode = 2;
@@ -143,10 +149,10 @@ static uint32_t wl_find_latest() {
 }
 
 static bool wl_write(const Config &c) {
-    uint32_t latest   = wl_find_latest();
+    uint32_t latest    = wl_find_latest();
     uint32_t next_seq  = 1;
     uint32_t next_page = 0;
-    bool need_erase    = false;
+    bool     need_erase = false;
 
     if (latest == WL_PAGES) {
         need_erase = true;
@@ -266,7 +272,7 @@ bool profile_save(uint8_t slot) {
     memcpy(page_buf, &to_save, sizeof(Config));
 
     const uint32_t offset = profile_offset(slot);
-    const uint32_t ints = save_and_disable_interrupts();
+    const uint32_t ints   = save_and_disable_interrupts();
     flash_range_erase(offset, FLASH_SECTOR_SIZE);
     flash_range_program(offset, page_buf, FLASH_PAGE_SIZE);
     restore_interrupts(ints);
