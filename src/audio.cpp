@@ -1,3 +1,4 @@
+#include "pico/util/queue.h"
 #include "audio.h"
 #include "config.h"
 #include "bt.h"
