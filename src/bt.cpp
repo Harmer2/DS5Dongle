@@ -56,9 +56,9 @@ typedef struct {
 } send_entry_t;
 
 static send_entry_t send_fifo[SEND_FIFO_SIZE];
-static volatile uint8_t fifo_head = 0;
-static volatile uint8_t fifo_tail = 0;
-static volatile uint8_t fifo_count = 0;
+static uint8_t fifo_head = 0;
+static uint8_t fifo_tail = 0;
+static uint8_t fifo_count = 0;
 
 static uint8_t feature_report_buf[256];
 static uint16_t feature_report_len = 0;
@@ -81,7 +81,7 @@ void bt_init(void) {
     l2cap_register_service(&bt_packet_handler, L2CAP_PSM_HID_CONTROL, L2CAP_MTU, gap_get_security_level());
     l2cap_register_service(&bt_packet_handler, L2CAP_PSM_HID_INTERRUPT, L2CAP_MTU, gap_get_security_level());
 
-    gap_set_io_capability(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
+    gap_ssp_set_io_capability(IO_CAPABILITY_NO_INPUT_NO_OUTPUT);
     gap_set_security_level(LEVEL_2);
 
     gap_set_local_name("DS5 Bridge");
@@ -151,7 +151,7 @@ void bt_poll(void) {
 
     bt_send_next();
 
-    const Config_body& cfg = get_config();
+    const auto& cfg = get_config();
     if (!cfg.disable_inactive_disconnect && state == BT_STATE_CONNECTED) {
         int64_t inactive_us = absolute_time_diff_us(last_activity, get_absolute_time());
         if (inactive_us > (int64_t)cfg.inactive_time * 60LL * 1000000LL) {
