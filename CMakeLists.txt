@@ -33,9 +33,16 @@ else ()
     set(ENABLE_VERBOSE_VALUE 0)
 endif ()
 
+# Blink onboard LED at 1Hz when DualSense battery <= 10% and discharging.
+# ON by default. Pass -DENABLE_BATT_LED=OFF to disable.
+option(ENABLE_BATT_LED "Blink Pico LED when DualSense battery is low (<=10%)" ON)
+if (ENABLE_BATT_LED)
+    set(ENABLE_BATT_LED_VALUE 1)
+else ()
+    set(ENABLE_BATT_LED_VALUE 0)
+endif ()
+
 # Opus encoder complexity: 0=lowest CPU, 10=highest quality
-# Passed via cmake -DOPUS_COMPLEXITY=2
-# FIX: Use CACHE STRING so CMake properly tracks it when passed via CLI
 set(OPUS_COMPLEXITY 0 CACHE STRING "Opus encoder complexity (0-10)")
 
 include(pico_sdk_import.cmake)
@@ -53,6 +60,11 @@ add_executable(ds5-bridge
         src/config.cpp
         src/cmd.cpp
 )
+
+# battery_led.cpp is only compiled when ENABLE_BATT_LED is ON
+if (ENABLE_BATT_LED)
+    target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
+endif ()
 
 add_library(wdl_resampler STATIC
         lib/WDL/WDL/resample.cpp
@@ -79,6 +91,7 @@ target_compile_definitions(ds5-bridge PRIVATE
         PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=0
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
+        ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
         OPUS_COMPLEXITY=${OPUS_COMPLEXITY}
 )
 
@@ -108,5 +121,3 @@ target_link_libraries(ds5-bridge
 )
 
 pico_add_extra_outputs(ds5-bridge)
-
-# Clean UI
