@@ -36,10 +36,10 @@ uint16_t pico_cmd_get(uint8_t report_id, uint8_t *buffer, uint16_t reqlen) {
     // Original: GET current config body
     if (report_id == 0xf7) {
         printf("[HID] 0xf7 GET config\n");
-        if (sizeof(Config_body) > reqlen) {
-            printf("[Config] Warning: Config_body larger than reqlen\n");
-        }
-        const auto len = std::min(sizeof(Config_body), static_cast<size_t>(reqlen));
+     if (sizeof(config_t) > reqlen) {
+    printf("[Config] Warning: config_t larger than reqlen\n");
+}
+const auto len = std::min(sizeof(config_t), static_cast<size_t>(reqlen));
         memcpy(buffer, &get_config(), len);
         return static_cast<uint16_t>(len);
     }
