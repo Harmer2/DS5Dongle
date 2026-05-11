@@ -105,9 +105,6 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
         ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
         OPUS_COMPLEXITY=${OPUS_COMPLEXITY}
-        CFG_TUD_AUDIO_FUNC_1_DESC_LEN=109
-        CFG_TUD_AUDIO_FUNC_1_N_AS_INT=2
-        CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ=64
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
