@@ -1,191 +1,79 @@
-//
-// Created by awalol on 2026/3/4.
-//
-
-#include "tusb.h"
-#include "bsp/board_api.h"
+#include "usb.h"
 #include "config.h"
+#include "cmd.h"
+#include "audio.h"
+#include "tusb.h"
 
-uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
-float volume[2] = {-100.0f,0.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
+#include <cstring>
 
-#define UAC1_ENTITY_SPK_FEATURE_UNIT    0x02
-#define UAC1_ENTITY_MIC_FEATURE_UNIT    0x05
+// DualSense USB input report size (report 0x01)
+static constexpr uint16_t DS_INPUT_REPORT_USB_SIZE = 64;
 
-/*int main() {
-    board_init();
+// HID report buffer for forwarding from BT → USB host
+static uint8_t hid_report_buf[DS_INPUT_REPORT_USB_SIZE];
+static volatile bool hid_report_ready = false;
 
-    tusb_rhport_init_t dev_init = {
-        .role = TUSB_ROLE_DEVICE,
-        .speed = TUSB_SPEED_AUTO
-    };
-    tusb_init(BOARD_TUD_RHPORT, &dev_init);
+void usb_init(void) {
+    tusb_init();
+}
 
-    board_init_after_tusb();
+void usb_task(void) {
+    tud_task();
 
-    while (1) {
-        tud_task();
+    // If we have a pending HID report and the endpoint is ready, send it
+    if (hid_report_ready && tud_hid_ready()) {
+        tud_hid_report(0x01, hid_report_buf, DS_INPUT_REPORT_USB_SIZE);
+        hid_report_ready = false;
     }
-}*/
+}
 
-//--------------------------------------------------------------------+
-// Audio Callback Functions
-//--------------------------------------------------------------------+
+void usb_send_hid_report(const uint8_t *report, uint16_t len) {
+    if (len > DS_INPUT_REPORT_USB_SIZE) {
+        len = DS_INPUT_REPORT_USB_SIZE;
+    }
+    memcpy(hid_report_buf, report, len);
+    if (len < DS_INPUT_REPORT_USB_SIZE) {
+        memset(hid_report_buf + len, 0, DS_INPUT_REPORT_USB_SIZE - len);
+    }
+    hid_report_ready = true;
+}
 
-//--------------------------------------------------------------------+
-// UAC1 Helper Functions
-//--------------------------------------------------------------------+
+bool usb_mounted(void) {
+    return tud_mounted();
+}
 
-static bool audio10_set_req_entity(tusb_control_request_t const *p_request, uint8_t *pBuff) {
-    uint8_t channelNum = TU_U16_LOW(p_request->wValue);
-    uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
-    uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
-    uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
+// --- TinyUSB HID Callbacks (weak symbol overrides) ---
 
-    // If request is for our speaker feature unit
-    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
-        switch (ctrlSel) {
-            case AUDIO10_FU_CTRL_MUTE:
-                switch (p_request->bRequest) {
-                    case AUDIO10_CS_REQ_SET_CUR:
-                        // Only 1st form is supported
-                        TU_VERIFY(p_request->wLength == 1);
+extern "C" uint16_t tud_hid_get_report_cb(uint8_t instance, uint8_t report_id,
+                                            hid_report_type_t report_type,
+                                            uint8_t *buffer, uint16_t reqlen) {
+    (void)instance;
 
-                        mute[index] = pBuff[0];
-
-                        TU_LOG2("    Set Mute: %d of entity: %u\r\n", mute[index], entityID);
-                        return true;
-
-                    default:
-                        return false; // not supported
-                }
-
-            case AUDIO10_FU_CTRL_VOLUME:
-                switch (p_request->bRequest) {
-                    case AUDIO10_CS_REQ_SET_CUR:
-                        // Only 1st form is supported
-                        TU_VERIFY(p_request->wLength == 2);
-
-                        volume[index] = static_cast<float>(*reinterpret_cast<int16_t const *>(pBuff)) / 256;
-                        if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
-                            auto config = get_config();
-                            config.speaker_volume = volume[index];
-                            set_config(config);
-                        }
-
-                        TU_LOG2("    Set Volume: %d dB of entity: %u\r\n", volume[index], entityID);
-                        return true;
-
-                    default:
-                        return false; // not supported
-                }
-
-            // Unknown/Unsupported control
-            default:
-                TU_BREAKPOINT();
-                return false;
-        }
+    if (report_type == HID_REPORT_TYPE_FEATURE) {
+        return cmd_get_feature_report(report_id, buffer, reqlen);
     }
 
-    return false;
-}
-
-static bool audio10_get_req_entity(uint8_t rhport, tusb_control_request_t const *p_request) {
-    uint8_t channelNum = TU_U16_LOW(p_request->wValue);
-    uint8_t ctrlSel = TU_U16_HIGH(p_request->wValue);
-    uint8_t entityID = TU_U16_HIGH(p_request->wIndex);
-    uint8_t index = entityID == UAC1_ENTITY_SPK_FEATURE_UNIT ? 0 : 1;
-
-    // If request is for our speaker feature unit
-    if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT || entityID == UAC1_ENTITY_MIC_FEATURE_UNIT) {
-        switch (ctrlSel) {
-            case AUDIO10_FU_CTRL_MUTE:
-                // Audio control mute cur parameter block consists of only one byte - we thus can send it right away
-                // There does not exist a range parameter block for mute
-                TU_LOG2("    Get Mute of entity: %u\r\n", entityID);
-                return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &mute[index], 1);
-
-            case AUDIO10_FU_CTRL_VOLUME:
-                switch (p_request->bRequest) {
-                    case AUDIO10_CS_REQ_GET_CUR:
-                        TU_LOG2("    Get Volume of entity: %u\r\n", entityID); {
-                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
-                                volume[index] = get_config().speaker_volume;
-                            }
-                            int16_t vol = volume[index] * 256; // convert to 1/256 dB units
-                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &vol, sizeof(vol));
-                        }
-
-                    case AUDIO10_CS_REQ_GET_MIN:
-                        TU_LOG2("    Get Volume min of entity: %u\r\n", entityID); {
-                            uint8_t min[2];
-                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
-                                min[0] = 0x00;
-                                min[1] = 0x9c;
-                            }else {
-                                min[0] = 0x00;
-                                min[1] = 0x00;
-                            }
-                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &min, sizeof(min));
-                        }
-
-                    case AUDIO10_CS_REQ_GET_MAX:
-                        TU_LOG2("    Get Volume max of entity: %u\r\n", entityID); {
-                            uint8_t max[2];
-                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
-                                max[0] = 0x00;
-                                max[1] = 0x00;
-                            }else {
-                                max[0] = 0x00;
-                                max[1] = 0x30;
-                            }
-                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &max, sizeof(max));
-                        }
-
-                    case AUDIO10_CS_REQ_GET_RES:
-                        TU_LOG2("    Get Volume res of entity: %u\r\n", entityID); {
-                            uint8_t res[2];
-                            if (entityID == UAC1_ENTITY_SPK_FEATURE_UNIT) {
-                                res[0] = 0x00;
-                                res[1] = 0x01;
-                            }else {
-                                res[0] = 0x7a;
-                                res[1] = 0x00;
-                            }
-                            return tud_audio_buffer_and_schedule_control_xfer(rhport, p_request, &res, sizeof(res));
-                        }
-                    // Unknown/Unsupported control
-                    default:
-                        TU_BREAKPOINT();
-                        return false;
-                }
-                break;
-
-            // Unknown/Unsupported control
-            default:
-                TU_BREAKPOINT();
-                return false;
-        }
+    if (report_type == HID_REPORT_TYPE_INPUT && report_id == 0x01) {
+        uint16_t copy_len = (reqlen < DS_INPUT_REPORT_USB_SIZE) ? reqlen : DS_INPUT_REPORT_USB_SIZE;
+        memcpy(buffer, hid_report_buf, copy_len);
+        return copy_len;
     }
 
-    return false;
+    return 0;
 }
 
-// Invoked when audio class specific get request received for an entity
-bool tud_audio_get_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
-    (void) rhport;
+extern "C" void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+                                       hid_report_type_t report_type,
+                                       uint8_t const *buffer, uint16_t bufsize) {
+    (void)instance;
 
-    return audio10_get_req_entity(rhport, p_request);
-}
+    if (report_type == HID_REPORT_TYPE_FEATURE) {
+        cmd_set_feature_report(report_id, buffer, bufsize);
+        return;
+    }
 
-// Invoked when audio class specific set request received for an entity
-bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p_request, uint8_t *buf) {
-    (void) rhport;
-
-    return audio10_set_req_entity(p_request, buf);
-}
-
-void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
-    (void) instance;
-    (void) len;
+    if (report_type == HID_REPORT_TYPE_OUTPUT && report_id == 0x02) {
+        set_state_data(buffer, bufsize);
+        return;
+    }
 }

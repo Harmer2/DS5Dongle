@@ -1,11 +1,20 @@
-//
-// Created by awalol on 2026/3/4.
-//
-
 #ifndef DS5_BRIDGE_USB_H
 #define DS5_BRIDGE_USB_H
 
-extern uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
-extern float volume[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
+#include <stdint.h>
+#include <stdbool.h>
 
-#endif //DS5_BRIDGE_USB_H
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+void usb_init(void);
+void usb_task(void);
+void usb_send_hid_report(const uint8_t *report, uint16_t len);
+bool usb_mounted(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // DS5_BRIDGE_USB_H

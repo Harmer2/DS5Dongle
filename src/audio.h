@@ -1,16 +1,25 @@
-//
-// Created by awalol on 2026/3/5.
-//
-
 #ifndef DS5_BRIDGE_AUDIO_H
 #define DS5_BRIDGE_AUDIO_H
 
-#include <cstdint>
+#include <stdint.h>
 
-void audio_init();
-void audio_loop();
-void core1_entry();
-void set_headset(bool state);
-void set_state_data(const uint8_t* data, const uint8_t len);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-#endif //DS5_BRIDGE_AUDIO_H
+void audio_init(void);
+void audio_loop(void);
+void audio_update_gains(void);
+
+// Set DualSense output state (LED/rumble/triggers) — constructs BT report 0x31
+// Called from usb.cpp when host sends output report 0x02
+void set_state_data(const uint8_t *data, uint16_t len);
+
+// Toggle headset-connected flag in DualSense output reports
+void set_headset(bool connected);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif // DS5_BRIDGE_AUDIO_H

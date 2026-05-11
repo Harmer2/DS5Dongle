@@ -1,227 +1,281 @@
-// Created by awalol on 2026/3/5.
-// v2-opt — fifo depth 2->4, cached audio_gain, Waveshare RP2350B-Plus-W
-
 #include "audio.h"
-#include "bt.h"
-#include "resample.h"
-#include "tusb.h"
-#include <algorithm>
-#include <cmath>
-#include <cstdio>
-#include "opus.h"
-#include "utils.h"
-#include "pico/multicore.h"
-#include "pico/util/queue.h"
 #include "config.h"
-#include "usb.h"
+#include "bt.h"
+#include "utils.h"
 
-#define INPUT_CHANNELS  4
-#define OUTPUT_CHANNELS 2
-#define SAMPLE_SIZE     64
-#define REPORT_SIZE     398
-#define REPORT_ID       0x36
+#include <string.h>
+#include <math.h>
+#include "pico/stdlib.h"
+#include "pico/multicore.h"
+#include "pico/critical_section.h"
+#include "hardware/sync.h"
+#include "tusb.h"
 
-// Opus complexity: 0 = lowest CPU, 4 = highest quality.
-// At 360 MHz core1 has headroom for 2.
-// Reduce to 0 if stuttering appears.
-#ifndef OPUS_COMPLEXITY
-#define OPUS_COMPLEXITY 2
-#endif
+#include "opus.h"
+#include "WDL/resample.h"
 
-using std::clamp;
-using std::max;
+// === Constants ===
+#define SAMPLE_RATE_IN      48000
+#define SAMPLE_RATE_HAPTIC  3000
+#define OUTPUT_CHANNELS     2
+#define OPUS_FRAME_SAMPLES  480   // 10ms at 48kHz
+#define OPUS_BITRATE        160000
+#define OPUS_MAX_PACKET     200
+#define BT_REPORT_SIZE      398
+#define HAPTIC_RATIO        16    // 48000 / 3000
 
-static WDL_Resampler resampler;
-static uint8_t reportSeqCounter = 0;
-static uint8_t packetCounter    = 0;
-static bool    plug_headset     = false;
+#define AUDIO_FIFO_DEPTH    6
 
-alignas(8) static uint32_t audio_core1_stack[8192];
-queue_t audio_fifo;
-static uint8_t opus_buf[200];
-critical_section_t opus_cs;
+#define CORE1_STACK_SIZE    (8192)
+static uint32_t core1_stack[CORE1_STACK_SIZE];
 
-struct audio_raw_element {
-    float data[512 * 2];
-};
+// === Audio element passed Core0 → Core1 via queue ===
+typedef struct {
+    float samples[OPUS_FRAME_SAMPLES * OUTPUT_CHANNELS]; // 960 floats = 3840 bytes
+} audio_raw_element;
 
-uint8_t state_data[63] = {
-    0xfd, 0xf7, 0x0, 0x0, 0x7f, 0x7f,
-    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00,
-};
+// === State ===
+static queue_t audio_fifo;
+static critical_section_t opus_cs;
 
-void set_state_data(const uint8_t* data, const uint8_t len) {
-    memcpy(state_data, data, len);
-}
+static uint8_t opus_buf[OPUS_MAX_PACKET];
+static int opus_buf_len = 0;
 
-void set_headset(bool state) {
-    plug_headset = state;
-}
+static int16_t haptic_buf[OPUS_FRAME_SAMPLES / HAPTIC_RATIO * OUTPUT_CHANNELS]; // 60 samples
+static int haptic_buf_len = 0;
 
-// ── Cached audio gain ─────────────────────────────────────────────────────────
-// powf(10, x/20) is expensive. Cache it and only recompute when volume changes.
-// This removes a powf() call from every audio_loop() tick on Core 0.
-static float cached_audio_gain     = 0.0f;
-static float cached_speaker_volume = -999.0f; // sentinel: force first compute
+static WDL_Resampler haptic_resampler;
 
-static float get_audio_gain() {
-    const float vol = get_config().speaker_volume;
-    if (vol != cached_speaker_volume) {
-        cached_speaker_volume = vol;
-        cached_audio_gain     = powf(10.0f, vol / 20.0f);
-    }
-    return mute[0] ? 0.0f : cached_audio_gain;
-}
+static int16_t usb_audio_buf[4 * 48];
 
-void audio_loop() {
-    if (!tud_audio_available()) return;
+static float speaker_accum[OPUS_FRAME_SAMPLES * OUTPUT_CHANNELS];
+static float haptic_accum[OPUS_FRAME_SAMPLES * OUTPUT_CHANNELS];
+static int accum_pos = 0;
 
-    int16_t  raw[192];
-    uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
-    int      frames     = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
-    if (frames == 0) return;
+static float cached_speaker_gain = 1.0f;
+static float cached_haptics_gain = 1.0f;
 
-    static float audio_buf[512 * 2];
-    static uint  audio_buf_pos = 0;
+// === DualSense BT output report state (LED, rumble, triggers) ===
+// Report 0x31 = BT output. First byte after HID header (0xA2) is 0x31.
+// Total payload: 78 bytes (report data) + CRC = varies by protocol revision.
+// We store the raw host output data and rebuild into BT format on send.
+#define DS_BT_OUTPUT_REPORT_SIZE 78
 
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
+static uint8_t ds_output_state[DS_BT_OUTPUT_REPORT_SIZE];
+static bool ds_output_dirty = false;
+static critical_section_t output_cs;
 
-    // FIX: cache gain — no powf() per tick
-    const float audio_gain   = get_audio_gain();
-    const float haptics_gain = get_config().haptics_gain;
+static bool headset_connected = false;
 
-    for (int i = 0; i < nframes; i++) {
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS]     / 32768.0f * audio_gain;
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * audio_gain;
-
-        if (audio_buf_pos == 512 * 2) {
-            static audio_raw_element element{};
-            memcpy(element.data, audio_buf, 512 * 2 * 4);
-            // FIX: drop oldest frame if full rather than silently losing data
-            if (queue_is_full(&audio_fifo)) {
-                queue_try_remove(&audio_fifo, NULL);
-            }
-            if (!queue_try_add(&audio_fifo, &element)) {
-                printf("[Audio] Warning: audio_fifo add failed\n");
-            }
-            audio_buf_pos = 0;
-        }
-
-        in_buf[i * 2]     = static_cast<WDL_ResampleSample>(clamp(
-            raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain, -1.0f, 1.0f));
-        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(
-            raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain, -1.0f, 1.0f));
+// === Core 1 — Opus Encoding ===
+static void __time_critical_func(core1_opus_task)(void) {
+    int err;
+    OpusEncoder* encoder = opus_encoder_create(SAMPLE_RATE_IN, OUTPUT_CHANNELS,
+                                                OPUS_APPLICATION_AUDIO, &err);
+    if (err != OPUS_OK || !encoder) {
+        while (1) tight_loop_contents();
     }
 
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE];
-    const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
-
-    static int8_t haptic_buf[SAMPLE_SIZE];
-    static int    haptic_buf_pos = 0;
-
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = static_cast<int>(out_buf[i * 2]     * 127.0f);
-        int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
-        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127);
-        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
-
-        if (haptic_buf_pos != SAMPLE_SIZE) continue;
-
-        uint8_t pkt[REPORT_SIZE]{};
-        pkt[0] = REPORT_ID;
-        pkt[1] = reportSeqCounter << 4;
-        reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-        pkt[2] = 0x11 | 0 << 6 | 1 << 7;
-        pkt[3] = 7;
-        pkt[4] = 0b11111110;
-
-        const auto buf_len = get_config().audio_buffer_length;
-        pkt[5] = buf_len;
-        pkt[6] = buf_len;
-        pkt[7] = buf_len;
-        pkt[8] = buf_len;
-        pkt[9] = buf_len;
-
-        pkt[10] = packetCounter++;
-        pkt[11] = 0x10 | 0 << 6 | 1 << 7;
-        pkt[12] = 63;
-        memcpy(pkt + 13, state_data, sizeof(state_data));
-        pkt[76] = 0x12 | 0 << 6 | 1 << 7;
-        pkt[77] = SAMPLE_SIZE;
-        memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
-        pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
-        pkt[143] = 200;
-
-        critical_section_enter_blocking(&opus_cs);
-        memcpy(pkt + 144, opus_buf, 200);
-        critical_section_exit(&opus_cs);
-
-        bt_write(pkt, sizeof(pkt));
-        haptic_buf_pos = 0;
-    }
-}
-
-void audio_init() {
-    resampler.SetMode(true, 0, false);
-    resampler.SetRates(48000, 3000);
-    resampler.SetFeedMode(true);
-    resampler.Prealloc(2, 24, 6);
-
-    // FIX: depth 2->4 — gives Core 1 (Opus encoder) more headroom before
-    // frames are dropped. At 360 MHz Core 1 encodes ~10ms frames; depth 4
-    // covers ~40ms of burst without dropping. Depth 2 dropped frames under
-    // any transient load spike, causing the stuttering you heard.
-    queue_init(&audio_fifo, sizeof(audio_raw_element), 4);
-
-    critical_section_init(&opus_cs);
-    multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
-}
-
-static OpusEncoder  *encoder = nullptr;
-static WDL_Resampler resampler_audio;
-
-void core1_entry() {
-    int error = 0;
-    encoder = opus_encoder_create(48000, 2, OPUS_APPLICATION_AUDIO, &error);
-    if (error != 0) {
-        printf("[Audio] OpusEncoder create failed\n");
-        return;
-    }
-
-    opus_encoder_ctl(encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
-    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(200 * 8 * 100));
-    opus_encoder_ctl(encoder, OPUS_SET_VBR(false));
-    // Complexity from build flag (default 2). At 360 MHz core1 handles this fine.
+    opus_encoder_ctl(encoder, OPUS_SET_BITRATE(OPUS_BITRATE));
     opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
+    opus_encoder_ctl(encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+    opus_encoder_ctl(encoder, OPUS_SET_LSB_DEPTH(16));
 
-    resampler_audio.SetMode(true, 0, false);
-    resampler_audio.SetRates(51200, 48000);
-    resampler_audio.SetFeedMode(true);
-    resampler_audio.Prealloc(2, 512, 480);
+    audio_raw_element elem;
+    uint8_t encode_out[OPUS_MAX_PACKET];
 
-    while (true) {
-        static audio_raw_element audio_element{};
-        queue_remove_blocking(&audio_fifo, &audio_element);
+    while (1) {
+        queue_remove_blocking(&audio_fifo, &elem);
 
-        // Resample 512 -> 480 frames to fix noise. Credit: @Junhoo
-        WDL_ResampleSample *in_buf;
-        int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
-        for (int i = 0; i < nframes * 2; i++) {
-            in_buf[i] = audio_element.data[i];
+        int encoded = opus_encode_float(encoder, elem.samples, OPUS_FRAME_SAMPLES,
+                                         encode_out, OPUS_MAX_PACKET);
+
+        if (encoded > 0 && encoded <= OPUS_MAX_PACKET) {
+            critical_section_enter_blocking(&opus_cs);
+            memcpy(opus_buf, encode_out, encoded);
+            opus_buf_len = encoded;
+            critical_section_exit(&opus_cs);
         }
+    }
+}
 
-        static WDL_ResampleSample out_buf[480 * 2];
-        resampler_audio.ResampleOut(out_buf, nframes, 480, 2);
+// === Initialization ===
+void audio_init(void) {
+    queue_init(&audio_fifo, sizeof(audio_raw_element), AUDIO_FIFO_DEPTH);
+    critical_section_init(&opus_cs);
+    critical_section_init(&output_cs);
 
-        static uint8_t out[200];
-        (void) opus_encode_float(encoder, out_buf, 480, out, 200);
+    haptic_resampler.SetMode(true, 1, true);
+    haptic_resampler.SetRates(SAMPLE_RATE_IN, SAMPLE_RATE_HAPTIC);
 
-        critical_section_enter_blocking(&opus_cs);
-        memcpy(opus_buf, out, 200);
-        critical_section_exit(&opus_cs);
+    const config_t& cfg = get_config();
+    cached_speaker_gain = powf(10.0f, cfg.speaker_volume / 20.0f);
+    cached_haptics_gain = cfg.haptics_gain;
+
+    accum_pos = 0;
+    memset(speaker_accum, 0, sizeof(speaker_accum));
+    memset(haptic_accum, 0, sizeof(haptic_accum));
+    memset(ds_output_state, 0, sizeof(ds_output_state));
+
+    multicore_launch_core1_with_stack(core1_opus_task, core1_stack, sizeof(core1_stack));
+}
+
+void audio_update_gains(void) {
+    const config_t& cfg = get_config();
+    cached_speaker_gain = powf(10.0f, cfg.speaker_volume / 20.0f);
+    cached_haptics_gain = cfg.haptics_gain;
+}
+
+// === set_state_data: Host sends USB output report 0x02, we translate to BT 0x31 ===
+void set_state_data(const uint8_t *data, uint16_t len) {
+    if (!bt_is_connected()) return;
+
+    // DualSense USB output report 0x02 is 48 bytes (excluding report ID).
+    // DualSense BT output report 0x31 is 78 bytes payload.
+    // The mapping: USB byte offsets shift in BT report.
+    // BT report structure:
+    //   [0]    = 0x31 (report ID)
+    //   [1]    = sequence tag (auto-increment)
+    //   [2]    = USB byte 0 (valid flags 0)
+    //   [3]    = USB byte 1 (valid flags 1)
+    //   [4..] = USB byte 2+ (motor, LED, trigger data)
+    //   [74..77] = CRC32
+
+    static uint8_t seq = 0;
+
+    uint8_t report[DS_BT_OUTPUT_REPORT_SIZE];
+    memset(report, 0, DS_BT_OUTPUT_REPORT_SIZE);
+
+    report[0] = 0x31;       // BT output report ID
+    report[1] = seq++;      // Sequence number
+
+    // Copy USB output data into BT report offset +2
+    // USB report 0x02 data starts after report ID (which the host already stripped)
+    uint16_t copy_len = len;
+    if (copy_len > DS_BT_OUTPUT_REPORT_SIZE - 6) {  // Leave room for header + CRC
+        copy_len = DS_BT_OUTPUT_REPORT_SIZE - 6;
+    }
+    memcpy(&report[2], data, copy_len);
+
+    // Set headset connected flag if applicable
+    // Byte 2 = valid flags 0: bit 4 = audio control enable
+    // Byte 39 (USB offset 37) = plugged status flags
+    if (headset_connected) {
+        report[2] |= 0x10;  // Enable audio control
+    }
+
+    // CRC32 over the entire report (seed 0xEADA2D49)
+    fill_output_report_checksum(report, DS_BT_OUTPUT_REPORT_SIZE);
+
+    // Cache for reference
+    critical_section_enter_blocking(&output_cs);
+    memcpy(ds_output_state, report, DS_BT_OUTPUT_REPORT_SIZE);
+    ds_output_dirty = false;
+    critical_section_exit(&output_cs);
+
+    // Send via BT
+    bt_write(report, DS_BT_OUTPUT_REPORT_SIZE);
+}
+
+// === set_headset: Toggle headset presence in output reports ===
+void set_headset(bool connected) {
+    headset_connected = connected;
+}
+
+// === Pack haptics + Opus into BT audio report ===
+static void pack_bt_audio_report(void) {
+    // DualSense BT audio report is 0x36, 398 bytes total
+    uint8_t report[BT_REPORT_SIZE];
+    memset(report, 0, BT_REPORT_SIZE);
+
+    report[0] = 0x36; // BT audio output report ID
+
+    // Haptic data: 30 frames × 2ch × 2 bytes = 120 bytes at offset 4
+    const int haptic_offset = 4;
+    int haptic_samples = haptic_buf_len;
+    if (haptic_samples > (int)sizeof(haptic_buf) / 2) {
+        haptic_samples = sizeof(haptic_buf) / 2;
+    }
+    memcpy(&report[haptic_offset], haptic_buf, haptic_samples * 2);
+
+    // Opus payload after haptics
+    const int opus_offset = haptic_offset + 120;
+    critical_section_enter_blocking(&opus_cs);
+    int olen = opus_buf_len;
+    if (olen > 0) {
+        memcpy(&report[opus_offset], opus_buf, olen);
+    }
+    critical_section_exit(&opus_cs);
+
+    report[2] = (uint8_t)olen;
+    report[3] = (uint8_t)haptic_samples;
+
+    fill_output_report_checksum(report, BT_REPORT_SIZE);
+
+    bt_write(report, BT_REPORT_SIZE);
+}
+
+// === Main audio loop (Core 0) ===
+void audio_loop(void) {
+    if (!tud_audio_mounted()) return;
+    if (!bt_is_connected()) return;
+
+    int bytes_read = tud_audio_read(usb_audio_buf, sizeof(usb_audio_buf));
+    if (bytes_read <= 0) return;
+
+    int samples_per_channel = bytes_read / (4 * sizeof(int16_t));
+
+    for (int i = 0; i < samples_per_channel; i++) {
+        int idx = accum_pos * OUTPUT_CHANNELS;
+
+        float l = (float)usb_audio_buf[i * 4 + 0] / 32768.0f * cached_speaker_gain;
+        float r = (float)usb_audio_buf[i * 4 + 1] / 32768.0f * cached_speaker_gain;
+        speaker_accum[idx + 0] = l;
+        speaker_accum[idx + 1] = r;
+
+        float hl = (float)usb_audio_buf[i * 4 + 2] / 32768.0f * cached_haptics_gain;
+        float hr = (float)usb_audio_buf[i * 4 + 3] / 32768.0f * cached_haptics_gain;
+        haptic_accum[idx + 0] = hl;
+        haptic_accum[idx + 1] = hr;
+
+        accum_pos++;
+
+        if (accum_pos >= OPUS_FRAME_SAMPLES) {
+            accum_pos = 0;
+
+            // Speaker → Core 1 for Opus encoding
+            audio_raw_element elem;
+            memcpy(elem.samples, speaker_accum, sizeof(elem.samples));
+
+            if (queue_is_full(&audio_fifo)) {
+                audio_raw_element discard;
+                queue_try_remove(&audio_fifo, &discard);
+            }
+            queue_try_add(&audio_fifo, &elem);
+
+            // Haptics → Resample 48kHz to 3kHz
+            WDL_ResampleSample* rsin = NULL;
+            int nframes = haptic_resampler.ResamplePrepare(OPUS_FRAME_SAMPLES, OUTPUT_CHANNELS, &rsin);
+
+            int copy_frames = (nframes < OPUS_FRAME_SAMPLES) ? nframes : OPUS_FRAME_SAMPLES;
+            for (int j = 0; j < copy_frames * OUTPUT_CHANNELS; j++) {
+                rsin[j] = haptic_accum[j];
+            }
+
+            float haptic_out[64 * OUTPUT_CHANNELS];
+            int out_frames = haptic_resampler.ResampleOut(haptic_out, nframes,
+                                                          nframes / HAPTIC_RATIO, OUTPUT_CHANNELS);
+
+            haptic_buf_len = 0;
+            for (int j = 0; j < out_frames * OUTPUT_CHANNELS && j < (int)(sizeof(haptic_buf)/sizeof(int16_t)); j++) {
+                float clamped = haptic_out[j];
+                if (clamped > 1.0f) clamped = 1.0f;
+                if (clamped < -1.0f) clamped = -1.0f;
+                haptic_buf[j] = (int16_t)(clamped * 32767.0f);
+                haptic_buf_len++;
+            }
+
+            pack_bt_audio_report();
+        }
     }
 }
