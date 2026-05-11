@@ -110,3 +110,18 @@ void config_save(void) {
 
     multicore_lockout_end_blocking();
 }
+
+// Profile management stubs (not implemented yet)
+uint8_t profile_get_active(void) {
+    return 0; // Always return slot 0
+}
+
+bool profile_load(uint8_t slot) {
+    (void)slot;
+    return false; // Not implemented
+}
+
+bool profile_save(uint8_t slot) {
+    (void)slot;
+    return false; // Not implemented
+}
