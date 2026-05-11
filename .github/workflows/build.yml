@@ -31,13 +31,17 @@ jobs:
 
       - name: Verify library submodules
         run: |
-          for dir in lib/opus lib/WDL; do
-            if [ ! -f "$dir/CMakeLists.txt" ] && [ ! -f "$dir/Makefile" ]; then
-              echo "ERROR: $dir appears empty — check .gitmodules"
-              ls -la "$dir" || true
-              exit 1
-            fi
-          done
+          if [ ! -f "lib/opus/CMakeLists.txt" ]; then
+            echo "ERROR: lib/opus appears empty — check .gitmodules"
+            ls -la lib/opus || true
+            exit 1
+          fi
+          if [ ! -f "lib/WDL/WDL/resample.cpp" ]; then
+            echo "ERROR: lib/WDL appears empty — check .gitmodules"
+            ls -la lib/WDL || true
+            ls -la lib/WDL/WDL || true
+            exit 1
+          fi
           echo "Submodules OK"
 
       - name: Prepare build dependency cache
