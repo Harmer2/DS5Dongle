@@ -80,7 +80,8 @@ jobs:
           cp boards/waveshare_rp2350b_plus_w.h \
             "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
 
-      - name: Build standard firmware (360 MHz, Opus complexity 2)
+      # ── Standard firmware (360 MHz, Opus complexity 2, optimised defaults) ──
+      - name: Build standard firmware
         run: |
           cmake -S . -B build/standard -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
@@ -91,6 +92,7 @@ jobs:
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
 
+      # ── Debug firmware (serial + verbose logging) ────────────────────────────
       - name: Build debug firmware
         run: |
           cmake -S . -B build/debug -G Ninja \
@@ -104,17 +106,15 @@ jobs:
           cp build/debug/ds5-bridge.uf2 artifacts/ds5-bridge-debug.uf2
 
       - name: Upload standard UF2 artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
+          name: ds5-bridge
           path: artifacts/ds5-bridge.uf2
-          archive: false
           if-no-files-found: error
 
       - name: Upload debug UF2 artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
+          name: ds5-bridge-debug
           path: artifacts/ds5-bridge-debug.uf2
-          archive: false
           if-no-files-found: error
-
-      #change
