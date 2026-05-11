@@ -69,7 +69,7 @@ add_library(wdl_resampler STATIC
         lib/WDL/WDL/resample.cpp
 )
 target_include_directories(wdl_resampler PUBLIC
-        lib/WDL/WDL
+        lib/WDL
 )
 
 # ── Opus configuration (disable DNN features, fixed-point for Cortex-M33) ──
@@ -105,6 +105,9 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
         ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
         OPUS_COMPLEXITY=${OPUS_COMPLEXITY}
+        CFG_TUD_AUDIO_FUNC_1_DESC_LEN=109
+        CFG_TUD_AUDIO_FUNC_1_N_AS_INT=2
+        CFG_TUD_AUDIO_FUNC_1_CTRL_BUF_SZ=64
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
@@ -115,6 +118,7 @@ pico_enable_stdio_usb(ds5-bridge ${ENABLE_SERIAL_VALUE})
 
 target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${CMAKE_CURRENT_SOURCE_DIR}/lib/WDL
 )
 
 target_link_libraries(ds5-bridge
