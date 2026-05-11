@@ -79,6 +79,10 @@ jobs:
       - name: Download Pico SDK
         if: steps.cache-pico-sdk.outputs.cache-hit != 'true'
         run: |
+          if [ -d "$PICO_SDK_PATH" ]; then
+            echo "Removing stale pico-sdk directory"
+            rm -rf "$PICO_SDK_PATH"
+          fi
           git clone --depth 1 --branch "$PICO_SDK_REF" https://github.com/raspberrypi/pico-sdk.git "$PICO_SDK_PATH"
           git -C "$PICO_SDK_PATH" submodule update --init --recursive
 
