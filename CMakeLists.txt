@@ -41,6 +41,9 @@ else ()
     set(ENABLE_BATT_LED_VALUE 0)
 endif ()
 
+# Opus encoder complexity (0=lowest CPU, 10=highest quality).
+# At 360 MHz Core 1 handles complexity 4 comfortably.
+# Reduce to 2 if you observe audio dropouts on your specific unit.
 set(OPUS_COMPLEXITY 4 CACHE STRING "Opus encoder complexity (0-10)")
 
 include(pico_sdk_import.cmake)
@@ -48,6 +51,25 @@ include(pico_sdk_import.cmake)
 project(ds5-bridge C CXX ASM)
 
 pico_sdk_init()
+
+# ── Flash size guard ──────────────────────────────────────────────────────────
+# The Waveshare RP2350B Plus W has a W25Q128JVSIQ = 16 MB flash.
+# boards/waveshare_rp2350b_plus_w.h defines PICO_FLASH_SIZE_BYTES = 16777216.
+# config.cpp anchors ALL flash sector offsets to PICO_FLASH_SIZE_BYTES.
+# If this value is wrong, config/profile writes will corrupt the firmware.
+# This guard fires at CMake configure time if the value is incorrect.
+if (DEFINED PICO_FLASH_SIZE_BYTES)
+    if (NOT PICO_FLASH_SIZE_BYTES EQUAL 16777216)
+        message(FATAL_ERROR
+            "PICO_FLASH_SIZE_BYTES=${PICO_FLASH_SIZE_BYTES} but the Waveshare "
+            "RP2350B Plus W has 16 MB flash (16777216 bytes). "
+            "Check boards/waveshare_rp2350b_plus_w.h.")
+    endif ()
+else ()
+    message(WARNING
+        "PICO_FLASH_SIZE_BYTES is not visible at CMake configure time. "
+        "Ensure boards/waveshare_rp2350b_plus_w.h defines it as 16777216.")
+endif ()
 
 add_executable(ds5-bridge
         src/usb_descriptors.cpp
@@ -70,7 +92,7 @@ target_include_directories(wdl_resampler PUBLIC
         lib/WDL/WDL
 )
 
-# Opus optimizations - keep float API enabled for opus_encode_float()
+# Opus build options — fixed-point codec with float API for opus_encode_float()
 set(OPUS_DISABLE_DEEP_PLC ON CACHE BOOL "" FORCE)
 set(OPUS_DISABLE_DRED ON CACHE BOOL "" FORCE)
 set(OPUS_DISABLE_OSCE ON CACHE BOOL "" FORCE)
@@ -94,9 +116,19 @@ target_compile_definitions(wdl_resampler PRIVATE
 target_compile_definitions(ds5-bridge PRIVATE
         CYW43_LWIP=0
         ENABLE_SERIAL=${ENABLE_SERIAL_VALUE}
+        # Core 1 runs entirely from SRAM (Opus encode loop + blocking queue wait).
+        # It never reads or writes flash, so Core 0 flash operations are safe
+        # without stopping Core 1. Do NOT add any flash access to core1_entry().
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
-        CYW43_PIO_CLOCK_DIV_INT=5
+        # CYW43439 SPI interface maximum clock is ~50 MHz.
+        # CYW43 SPI clock = sys_clock / CYW43_PIO_CLOCK_DIV_INT
+        # At 360 MHz sys_clock:
+        #   divider 5 → 72.0 MHz  OVER SPEC — causes BT corruption/disconnects
+        #   divider 6 → 60.0 MHz  marginal
+        #   divider 7 → 51.4 MHz  marginal
+        #   divider 8 → 45.0 MHz  within spec — used here
+        CYW43_PIO_CLOCK_DIV_INT=8
         PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=0
