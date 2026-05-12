@@ -11,5 +11,6 @@ void audio_init();
 void audio_loop();
 void core1_entry();
 void set_headset(bool state);
+void set_state_data(const uint8_t* data, const uint8_t len);
 
 #endif //DS5_BRIDGE_AUDIO_H
