@@ -189,7 +189,7 @@ int main() {
     // 1.25V required for stable 360 MHz on RP2350B.
     vreg_set_voltage(VREG_VOLTAGE_1_25);
     sleep_ms(1000);
-    set_sys_clock_khz(360000, true);
+    set_sys_clock_khz(320000, true);
 
     board_init();
     tusb_rhport_init_t dev_init = {
