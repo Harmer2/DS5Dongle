@@ -87,7 +87,7 @@ void bt_l2cap_init() {
 }
 
 int bt_init() {
-   queue_init(&send_fifo, sizeof(send_element), 10);
+   queue_init(&send_fifo, sizeof(send_element), 20);
 queue_init(&priority_send_fifo, sizeof(send_element), 10);
     
     bt_l2cap_init();
@@ -305,6 +305,7 @@ case HCI_EVENT_INQUIRY_COMPLETE: {
             hid_interrupt_cid = 0;
             feature_data.clear();
             while (queue_try_remove(&send_fifo, NULL)) {}
+            while (queue_try_remove(&priority_send_fifo, NULL)) {}
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
             status_led_notify_disconnect(reason);
             printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
@@ -483,10 +484,11 @@ void bt_write(const uint8_t *data, const uint16_t len, const bool priority) {
     packet.data[0] = 0xA2;
     memcpy(packet.data + 1, data, len);
     fill_output_report_checksum(packet.data + 1, len);
-    if (priority) {
+if (priority) {
         if (!queue_try_add(&priority_send_fifo, &packet)) {
-            printf("[L2CAP bt_write] Error: Failed to add packet to priority send FIFO\n");
-            return;
+            // Drop oldest audio packet and insert newest — keeps audio current
+            queue_try_remove(&priority_send_fifo, NULL);
+            queue_try_add(&priority_send_fifo, &packet);
         }
     } else {
         if (!queue_try_add(&send_fifo, &packet)) {
