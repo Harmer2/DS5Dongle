@@ -19,20 +19,19 @@
 #include "status_led.h"
 
 #define MTU_CONTROL 256
-#define MTU_INTERRUPT 1691 
+#define MTU_INTERRUPT 1691
 
 using std::unordered_map;
 using std::vector;
 using std::queue;
 
 static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
-
 static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size);
 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
 static bool device_found = false;
-static bool new_pair = false; // 只有新匹配的设备才用创建channel，自动重连走的是service
+static bool new_pair = false;
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -47,7 +46,7 @@ struct send_element {
     size_t len;
 };
 
-absolute_time_t inactive_time = 0; // 手柄长时间静默
+absolute_time_t inactive_time = 0;
 
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
@@ -69,8 +68,6 @@ bool bt_disconnect() {
     if (acl_handle == HCI_CON_HANDLE_INVALID) {
         return false;
     }
-
-    // 0x13 = remote user terminated connection
     hci_send_cmd(&hci_disconnect, acl_handle, 0x13);
     return true;
 }
@@ -78,21 +75,18 @@ bool bt_disconnect() {
 void bt_l2cap_init() {
     l2cap_event_callback_registration.callback = &l2cap_packet_handler;
     l2cap_add_event_handler(&l2cap_event_callback_registration);
-    // 修复重连后自动断开的关键点
     sdp_init();
     l2cap_register_service(l2cap_packet_handler, PSM_HID_CONTROL, MTU_CONTROL, LEVEL_2);
     l2cap_register_service(l2cap_packet_handler, PSM_HID_INTERRUPT, MTU_INTERRUPT, LEVEL_2);
-
     l2cap_init();
 }
 
 int bt_init() {
-   queue_init(&send_fifo, sizeof(send_element), 20);
-queue_init(&priority_send_fifo, sizeof(send_element), 10);
-    
+    queue_init(&send_fifo, sizeof(send_element), 20);
+    queue_init(&priority_send_fifo, sizeof(send_element), 10);
+
     bt_l2cap_init();
 
-    // SSP (Secure Simple Pairing)
     gap_ssp_set_enable(true);
     gap_secure_connections_enable(true);
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
@@ -140,7 +134,6 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 hci_event_extended_inquiry_response_get_bd_addr(packet, addr);
             }
 
-            // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
             if ((cod & 0x000F00) == 0x000500) {
                 printf("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
@@ -150,25 +143,26 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             break;
         }
 
-case GAP_EVENT_INQUIRY_COMPLETE: {
-    printf("[HCI] GAP Inquiry complete.\n");
-    break;
-}
-case HCI_EVENT_INQUIRY_COMPLETE: {
-    printf("[HCI] HCI Inquiry complete.\n");
-    if (device_found) {
-        printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
-        new_pair = true;
-        hci_send_cmd(&hci_create_connection, current_device_addr,
-                     hci_usable_acl_packet_types(), 0, 0, 0, 1);
-        break;
-    }
-    printf("[HCI] Restart inquiry\n");
-    gap_inquiry_start(30);
-    gap_connectable_control(1);
-    gap_discoverable_control(1);
-    break;
-}
+        case GAP_EVENT_INQUIRY_COMPLETE: {
+            printf("[HCI] GAP Inquiry complete.\n");
+            break;
+        }
+
+        case HCI_EVENT_INQUIRY_COMPLETE: {
+            printf("[HCI] HCI Inquiry complete.\n");
+            if (device_found) {
+                printf("[HCI] Connecting to %s...\n", bd_addr_to_str(current_device_addr));
+                new_pair = true;
+                hci_send_cmd(&hci_create_connection, current_device_addr,
+                             hci_usable_acl_packet_types(), 0, 0, 0, 1);
+                break;
+            }
+            printf("[HCI] Restart inquiry\n");
+            gap_inquiry_start(30);
+            gap_connectable_control(1);
+            gap_discoverable_control(1);
+            break;
+        }
 
         case HCI_EVENT_COMMAND_STATUS: {
             const uint8_t status = hci_event_command_status_get_status(packet);
@@ -270,8 +264,7 @@ case HCI_EVENT_INQUIRY_COMPLETE: {
                                              &hid_control_cid);
                     } else if (hid_interrupt_cid == 0) {
                         l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_INTERRUPT,
-                                             MTU_INTERRUPT,
-                                             &hid_interrupt_cid);
+                                             MTU_INTERRUPT, &hid_interrupt_cid);
                     }
                 }
             }
@@ -322,7 +315,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         if (channel == hid_interrupt_cid) {
             bt_data_callback(INTERRUPT, packet, size);
 
-            // 静默检测
             if (get_config().disable_inactive_disconnect) {
                 return;
             }
@@ -332,10 +324,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                        1000 * 1000) {
                 printf("disconnect when inactive\n");
                 inactive_time = get_absolute_time();
-                // Arm the 1.5 s visual warning on GPIO23 before disconnecting.
-                // status_led_tick() in the main loop calls bt_disconnect()
-                // after the blink completes. Guard prevents re-arming if
-                // a warning is already in progress.
                 if (!status_led_disconnect_pending()) {
                     status_led_warn_disconnect();
                 }
@@ -395,7 +383,6 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     printf("Init DualSense\n");
 
                     init_feature();
-                    // 初始化手柄状态
                     uint8_t report32[142];
                     report32[0] = 0x32;
                     report32[1] = 0x10;
@@ -454,25 +441,30 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             break;
         }
 
-case L2CAP_EVENT_CAN_SEND_NOW: {
-    send_element send_packet{};
-    bool get_data = false;
-    if (!queue_is_empty(&priority_send_fifo)) {
-        get_data = queue_try_remove(&priority_send_fifo, &send_packet);
-    } else {
-        get_data = queue_try_remove(&send_fifo, &send_packet);
-    }
-    if (get_data) {
-        const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
-        if (status != 0) {
-            printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
+        case L2CAP_EVENT_CAN_SEND_NOW: {
+            send_element send_packet{};
+            bool get_data = false;
+            if (!queue_is_empty(&priority_send_fifo)) {
+                get_data = queue_try_remove(&priority_send_fifo, &send_packet);
+            } else {
+                get_data = queue_try_remove(&send_fifo, &send_packet);
+            }
+            if (get_data) {
+                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
+                if (status != 0) {
+                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
+                    // Send failed — put packet back at front of priority queue
+                    // so it is retried on the next CAN_SEND_NOW event
+                    queue_try_add(&priority_send_fifo, &send_packet);
+                }
+            }
+            // Always re-request if anything is waiting — prevents drain loop
+            // from stalling permanently after a send error or queue backup
+            if (!queue_is_empty(&priority_send_fifo) || !queue_is_empty(&send_fifo)) {
+                l2cap_request_can_send_now_event(hid_interrupt_cid);
+            }
+            break;
         }
-    }
-    if (!queue_is_empty(&priority_send_fifo) || !queue_is_empty(&send_fifo)) {
-        l2cap_request_can_send_now_event(hid_interrupt_cid);
-    }
-    break;
-}
     }
 }
 
@@ -484,9 +476,9 @@ void bt_write(const uint8_t *data, const uint16_t len, const bool priority) {
     packet.data[0] = 0xA2;
     memcpy(packet.data + 1, data, len);
     fill_output_report_checksum(packet.data + 1, len);
-if (priority) {
+    if (priority) {
         if (!queue_try_add(&priority_send_fifo, &packet)) {
-            // Drop oldest audio packet and insert newest — keeps audio current
+            // Drop oldest audio packet, insert newest — keeps audio current
             queue_try_remove(&priority_send_fifo, NULL);
             queue_try_add(&priority_send_fifo, &packet);
         }
@@ -496,9 +488,9 @@ if (priority) {
             return;
         }
     }
-    if (queue_get_level(&send_fifo) + queue_get_level(&priority_send_fifo) == 1) {
-        l2cap_request_can_send_now_event(hid_interrupt_cid);
-    }
+    // Kick drain loop on every write — covers the case where CAN_SEND_NOW
+    // stopped firing and the queue was sitting full and unserviced
+    l2cap_request_can_send_now_event(hid_interrupt_cid);
 }
 
 vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
@@ -542,4 +534,3 @@ void init_feature() {
     check_dse = true;
     get_feature_data(0x70, 64);
 }
-
