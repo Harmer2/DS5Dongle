@@ -20,7 +20,7 @@ endif ()
 set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")
 set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards)
 
-option(ENABLE_SERIAL "Enable USB CDC serial printf output" ON)
+option(ENABLE_SERIAL "Enable USB CDC serial printf output" OFF)
 if (ENABLE_SERIAL)
     set(ENABLE_SERIAL_VALUE 1)
 else ()
@@ -122,14 +122,13 @@ target_compile_definitions(ds5-bridge PRIVATE
         # without stopping Core 1. Do NOT add any flash access to core1_entry().
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
-        # CYW43439 SPI interface maximum clock is ~50 MHz.
-        # CYW43 SPI clock = sys_clock / CYW43_PIO_CLOCK_DIV_INT
-        # At 360 MHz sys_clock:
-        #   divider 5 → 72.0 MHz  OVER SPEC — causes BT corruption/disconnects
-        #   divider 6 → 60.0 MHz  marginal
-        #   divider 7 → 51.4 MHz  marginal
-        #   divider 8 → 45.0 MHz  within spec — used here
-        CYW43_PIO_CLOCK_DIV_INT=8
+        # CYW43439 SPI clock = sys_clock / CYW43_PIO_CLOCK_DIV_INT
+        # At 360 MHz sys_clock, divider 5 = 72 MHz.
+        # This exceeds the datasheet spec of ~50 MHz but works reliably
+        # on this specific hardware (Waveshare RP2350B Plus W).
+        # Divider 8 (45 MHz, within spec) breaks BT connectivity on this board.
+        # Do NOT change this value without retesting BT connection.
+        CYW43_PIO_CLOCK_DIV_INT=5
         PICO_STDIO_USB_USE_DEFAULT_DESCRIPTORS=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_BAUD_RATE=0
         PICO_STDIO_USB_ENABLE_RESET_VIA_VENDOR_INTERFACE=0
