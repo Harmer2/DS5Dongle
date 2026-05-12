@@ -2,6 +2,7 @@
 // Created by awalol on 2026/3/4.
 // v2 — 360 MHz + 1.25V, Waveshare RP2350B-Plus-W
 // v2-batt — added ENABLE_BATT_LED support
+// v3 — GPIO23 boot/disconnect LED via status_led
 //
 
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include "hardware/vreg.h"
 #include "hardware/watchdog.h"
 #include "pico/cyw43_arch.h"
+#include "status_led.h"
 #if ENABLE_SERIAL
 #include "pico/stdio_usb.h"
 #endif
@@ -180,6 +182,10 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 }
 
 int main() {
+    // GPIO23 ON immediately — board is alive before any SDK init.
+    // This is safe: gpio_init() only touches RP2350B registers, no CYW43 needed.
+    status_led_init();
+
     // 1.25V required for stable 360 MHz on RP2350B.
     vreg_set_voltage(VREG_VOLTAGE_1_25);
     sleep_ms(1000);
@@ -201,8 +207,12 @@ int main() {
 
     if (cyw43_arch_init()) {
         printf("Failed to initialize CYW43\n");
+        // Leave GPIO23 ON as error indicator — system is halted
         return 1;
     }
+
+    // CYW43 ready — turn off boot indicator, system is ready to pair
+    status_led_cyw43_ready();
     cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
 
 #if ENABLE_BATT_LED
@@ -212,10 +222,17 @@ int main() {
 #if !ENABLE_SERIAL
     if (watchdog_caused_reboot()) {
         printf("Rebooted by Watchdog!\n");
+        // Alternate both LEDs to distinguish watchdog reboot from clean boot.
+        // GPIO23 is direct GPIO; CYW43 LED goes through driver (already inited).
         for (int i = 0; i < 6; i++) {
-            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, i % 2 == 0);
-            sleep_ms(500);
+            const bool phase = (i % 2 == 0);
+            gpio_put(23, phase);
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, !phase);
+            sleep_ms(250);
         }
+        // Restore both to OFF after the sequence
+        gpio_put(23, false);
+        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
     } else {
         printf("Clean boot\n");
     }
@@ -242,6 +259,7 @@ int main() {
         tud_task();
         audio_loop();
         interrupt_loop();
+        status_led_tick();
 #if ENABLE_BATT_LED
         battery_led_tick();
 #endif
