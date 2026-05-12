@@ -400,4 +400,128 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                         0x3f,
                         0xfd, 0xf7, 0x0, 0x0,
                         0x7f, 0x7f,
-                
+                        0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
+                        0x7, 0x0, 0x0, 0x2, 0x1,
+                        0x00,
+                        0xff, 0xd7, 0x00
+                    };
+                    memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
+                    bt_write(report32, sizeof(report32));
+                } else {
+                    printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
+                }
+            } else {
+                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+                hid_control_cid = 0;
+                hid_interrupt_cid = 0;
+                device_found = false;
+                printf("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
+                bt_disconnect();
+            }
+            break;
+        }
+
+        case L2CAP_EVENT_INCOMING_CONNECTION: {
+            const uint16_t local_cid = l2cap_event_incoming_connection_get_local_cid(packet);
+            const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
+            printf("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X\n", psm, local_cid);
+            l2cap_accept_connection(local_cid);
+            break;
+        }
+
+        case L2CAP_EVENT_CHANNEL_CLOSED: {
+            const uint16_t local_cid = l2cap_event_channel_closed_get_local_cid(packet);
+            if (local_cid == hid_control_cid) {
+                hid_control_cid = 0;
+                printf("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
+            } else if (local_cid == hid_interrupt_cid) {
+                hid_interrupt_cid = 0;
+                printf("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
+            } else {
+                printf("[L2CAP] Channel closed cid=0x%04X\n", local_cid);
+            }
+            if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
+                bt_disconnect();
+            }
+            break;
+        }
+
+        case L2CAP_EVENT_CAN_SEND_NOW: {
+            static send_element send_packet{};
+            if (queue_try_remove(&send_fifo, &send_packet)) {
+                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
+                if (status != 0) {
+                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
+                }
+            }
+            if (!queue_is_empty(&send_fifo)) {
+                l2cap_request_can_send_now_event(hid_interrupt_cid);
+            }
+            break;
+        }
+    }
+}
+
+void bt_write(uint8_t *data, uint16_t len) {
+    if (hid_interrupt_cid == 0) return;
+    static send_element packet{};
+    memset(packet.data, 0, 512);
+    packet.len = len + 1;
+    packet.data[0] = 0xA2;
+    memcpy(packet.data + 1, data, len);
+    fill_output_report_checksum(packet.data + 1, len);
+
+    if (!queue_try_add(&send_fifo, &packet)) {
+        printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
+        return;
+    }
+    if (queue_get_level(&send_fifo) == 1) {
+        l2cap_request_can_send_now_event(hid_interrupt_cid);
+    }
+}
+
+vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
+    auto ret = vector<uint8_t>{};
+    if (feature_data.contains(reportId)) {
+        ret = feature_data[reportId];
+    }
+    if (!feature_data.contains(reportId) ||
+        reportId == 0x81 ||
+        reportId == 0x63 ||
+        reportId == 0x65 ||
+        reportId == 0x64
+    ) {
+        if (hid_control_cid != 0) {
+            uint8_t get_feature[] = {0x43, reportId};
+            l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
+            printf("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
+        }
+    }
+    return ret;
+}
+
+void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
+    if (hid_control_cid != 0) {
+        uint8_t get_feature[len + 2];
+        get_feature[0] = 0x53;
+        get_feature[1] = reportId;
+        memcpy(get_feature + 2, data, len);
+        fill_feature_report_checksum(get_feature + 1, len + 1);
+        l2cap_send(hid_control_cid, get_feature, len + 2);
+        printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
+        printf_hexdump(get_feature, len + 2);
+    }
+}
+
+void init_feature() {
+    get_feature_data(0x09, 20);
+    get_feature_data(0x20, 64);
+    get_feature_data(0x22, 64);
+    get_feature_data(0x05, 41);
+    check_dse = true;
+    get_feature_data(0x70, 64);
+}
+
