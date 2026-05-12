@@ -21,11 +21,11 @@
 #define REPORT_SIZE     398
 #define REPORT_ID       0x36
 
-// Opus complexity: 0 = lowest CPU, 4 = highest quality.
-// At 360 MHz core1 has headroom for 2.
-// Reduce to 0 if stuttering appears.
+// Opus complexity is set by CMakeLists.txt OPUS_COMPLEXITY (default 4).
+// At 360 MHz Core 1 handles complexity 4 without stuttering.
+// Reduce the CMake cache variable to 2 if you observe audio dropouts.
 #ifndef OPUS_COMPLEXITY
-#define OPUS_COMPLEXITY 2
+#define OPUS_COMPLEXITY 4
 #endif
 
 using std::clamp;
@@ -195,7 +195,8 @@ void core1_entry() {
     opus_encoder_ctl(encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
     opus_encoder_ctl(encoder, OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder, OPUS_SET_VBR(false));
-    // Complexity from build flag (default 2). At 360 MHz core1 handles this fine.
+    // Complexity set by CMakeLists.txt OPUS_COMPLEXITY (default 4).
+    // Core 1 at 360 MHz has comfortable headroom for complexity 4.
     opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
 
     resampler_audio.SetMode(true, 0, false);
