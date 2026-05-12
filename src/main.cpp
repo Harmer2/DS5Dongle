@@ -27,13 +27,8 @@
 #include "battery_led.h"
 #endif
 
-// battery_led.cpp reads interrupt_in_data[52] directly via extern.
-// set_state_data lives in audio.cpp.
-extern void set_state_data(const uint8_t* data, const uint8_t len);
-
 int reportSeqCounter = 0;
 uint8_t packetCounter = 0;
-bool spk_active = false;
 
 uint8_t interrupt_in_data[63] = {
     0x7f, 0x7d, 0x7f, 0x7e, 0x00, 0x00, 0xa7,
@@ -131,10 +126,8 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     uint8_t const alt = tu_u16_low(p_request->wValue);
     if (itf == 1) {
         printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
-        spk_active = alt;
     }
     return true;
-}
 
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
@@ -153,21 +146,17 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     if (report_id == 0) {
         switch (buffer[0]) {
             case 0x02: {
-                set_state_data(buffer + 1, bufsize - 1);
-                if (spk_active) {
-                    break;
-                }
-                uint8_t outputData[78];
-                outputData[0] = 0x31;
-                outputData[1] = reportSeqCounter << 4;
-                if (++reportSeqCounter == 256) {
-                    reportSeqCounter = 0;
-                }
-                outputData[2] = 0x10;
-                memcpy(outputData + 3, buffer + 1, bufsize - 1);
-                bt_write(outputData, sizeof(outputData));
-                break;
-            }
+    uint8_t outputData[78];
+    outputData[0] = 0x31;
+    outputData[1] = reportSeqCounter << 4;
+    if (++reportSeqCounter == 256) {
+        reportSeqCounter = 0;
+    }
+    outputData[2] = 0x10;
+    memcpy(outputData + 3, buffer + 1, bufsize - 1);
+    bt_write(outputData, sizeof(outputData));
+    break;
+}
         }
     }
     if (report_id == 0x80 ||
