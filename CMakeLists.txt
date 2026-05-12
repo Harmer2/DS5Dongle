@@ -20,7 +20,7 @@ endif ()
 set(PICO_BOARD waveshare_rp2350b_plus_w CACHE STRING "Board type")
 set(PICO_BOARD_HEADER_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/boards)
 
-option(ENABLE_SERIAL "Enable USB CDC serial printf output" OFF)
+option(ENABLE_SERIAL "Enable USB CDC serial printf output" ON)
 if (ENABLE_SERIAL)
     set(ENABLE_SERIAL_VALUE 1)
 else ()
