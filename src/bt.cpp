@@ -19,7 +19,7 @@
 #include "status_led.h"
 
 #define MTU_CONTROL 256
-#define MTU_INTERRUPT 1691
+#define MTU_INTERRUPT 
 
 using std::unordered_map;
 using std::vector;
