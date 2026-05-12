@@ -19,9 +19,15 @@ int bt_init();
 void bt_register_data_callback(bt_data_callback_t callback);
 void bt_send_packet(uint8_t *data, uint16_t len);
 void bt_send_control(uint8_t *data, uint16_t len);
-void bt_write(uint8_t* data,uint16_t len);
-std::vector<uint8_t> get_feature_data(uint8_t reportId,uint16_t len);
+void bt_write(uint8_t* data, uint16_t len);
+std::vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len);
 void init_feature();
-void set_feature_data(uint8_t reportId, uint8_t* data,uint16_t len);
+void set_feature_data(uint8_t reportId, uint8_t* data, uint16_t len);
+
+// Sends HCI disconnect command for the current ACL handle.
+// Returns false if no connection is active (safe to call speculatively).
+// Called by status_led.cpp after the pre-disconnect blink completes,
+// and internally by bt.cpp for L2CAP error recovery.
+bool bt_disconnect();
 
 #endif //DS5_BRIDGE_BT_H
