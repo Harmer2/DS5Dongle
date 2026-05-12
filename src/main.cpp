@@ -3,6 +3,7 @@
 // v2 — 360 MHz + 1.25V, Waveshare RP2350B-Plus-W
 // v2-batt — added ENABLE_BATT_LED support
 // v3 — GPIO23 boot/disconnect LED via status_led
+// v4 — priority send fifo, upstream audio refactor
 //
 
 #include <cstdio>
@@ -128,6 +129,7 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
         printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
     }
     return true;
+}
 
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
@@ -146,19 +148,20 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
     if (report_id == 0) {
         switch (buffer[0]) {
             case 0x02: {
-    uint8_t outputData[78];
-    outputData[0] = 0x31;
-    outputData[1] = reportSeqCounter << 4;
-    if (++reportSeqCounter == 256) {
-        reportSeqCounter = 0;
-    }
-    outputData[2] = 0x10;
-    memcpy(outputData + 3, buffer + 1, bufsize - 1);
-    bt_write(outputData, sizeof(outputData));
-    break;
-}
+                uint8_t outputData[78];
+                outputData[0] = 0x31;
+                outputData[1] = reportSeqCounter << 4;
+                if (++reportSeqCounter == 256) {
+                    reportSeqCounter = 0;
+                }
+                outputData[2] = 0x10;
+                memcpy(outputData + 3, buffer + 1, bufsize - 1);
+                bt_write(outputData, sizeof(outputData));
+                break;
+            }
         }
     }
+
     if (report_id == 0x80 ||
         report_id == 0x60 ||
         report_id == 0x62 ||
