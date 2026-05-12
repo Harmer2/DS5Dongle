@@ -21,9 +21,6 @@
 #define REPORT_SIZE     398
 #define REPORT_ID       0x36
 
-// Opus complexity is set by CMakeLists.txt OPUS_COMPLEXITY (default 4).
-// At 360 MHz Core 1 handles complexity 4 without stuttering.
-// Reduce the CMake cache variable to 2 if you observe audio dropouts.
 #ifndef OPUS_COMPLEXITY
 #define OPUS_COMPLEXITY 4
 #endif
@@ -45,27 +42,12 @@ struct audio_raw_element {
     float data[512 * 2];
 };
 
-uint8_t state_data[63] = {
-    0xfd, 0xf7, 0x0, 0x0, 0x7f, 0x7f,
-    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00,
-};
-
-void set_state_data(const uint8_t* data, const uint8_t len) {
-    memcpy(state_data, data, len);
-}
-
 void set_headset(bool state) {
     plug_headset = state;
 }
 
-// ── Cached audio gain ─────────────────────────────────────────────────────────
-// powf(10, x/20) is expensive. Cache it and only recompute when volume changes.
-// This removes a powf() call from every audio_loop() tick on Core 0.
 static float cached_audio_gain     = 0.0f;
-static float cached_speaker_volume = -999.0f; // sentinel: force first compute
+static float cached_speaker_volume = -999.0f;
 
 static float get_audio_gain() {
     const float vol = get_config().speaker_volume;
@@ -90,7 +72,6 @@ void audio_loop() {
     WDL_ResampleSample *in_buf;
     int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
 
-    // FIX: cache gain — no powf() per tick
     const float audio_gain   = get_audio_gain();
     const float haptics_gain = get_config().haptics_gain;
 
@@ -101,7 +82,6 @@ void audio_loop() {
         if (audio_buf_pos == 512 * 2) {
             static audio_raw_element element{};
             memcpy(element.data, audio_buf, 512 * 2 * 4);
-            // FIX: drop oldest frame if full rather than silently losing data
             if (queue_is_full(&audio_fifo)) {
                 queue_try_remove(&audio_fifo, NULL);
             }
@@ -147,20 +127,17 @@ void audio_loop() {
         pkt[9] = buf_len;
 
         pkt[10] = packetCounter++;
-        pkt[11] = 0x10 | 0 << 6 | 1 << 7;
-        pkt[12] = 63;
-        memcpy(pkt + 13, state_data, sizeof(state_data));
-        pkt[76] = 0x12 | 0 << 6 | 1 << 7;
-        pkt[77] = SAMPLE_SIZE;
-        memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
-        pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
-        pkt[143] = 200;
+        pkt[11] = 0x12 | 0 << 6 | 1 << 7;
+        pkt[12] = SAMPLE_SIZE;
+        memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
+        pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
+        pkt[78] = 200;
 
         critical_section_enter_blocking(&opus_cs);
-        memcpy(pkt + 144, opus_buf, 200);
+        memcpy(pkt + 79, opus_buf, 200);
         critical_section_exit(&opus_cs);
 
-        bt_write(pkt, sizeof(pkt));
+        bt_write(pkt, sizeof(pkt), true);
         haptic_buf_pos = 0;
     }
 }
@@ -170,13 +147,7 @@ void audio_init() {
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
-
-    // FIX: depth 2->4 — gives Core 1 (Opus encoder) more headroom before
-    // frames are dropped. At 360 MHz Core 1 encodes ~10ms frames; depth 4
-    // covers ~40ms of burst without dropping. Depth 2 dropped frames under
-    // any transient load spike, causing the stuttering you heard.
     queue_init(&audio_fifo, sizeof(audio_raw_element), 4);
-
     critical_section_init(&opus_cs);
     multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
 }
@@ -195,8 +166,6 @@ void core1_entry() {
     opus_encoder_ctl(encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
     opus_encoder_ctl(encoder, OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder, OPUS_SET_VBR(false));
-    // Complexity set by CMakeLists.txt OPUS_COMPLEXITY (default 4).
-    // Core 1 at 360 MHz has comfortable headroom for complexity 4.
     opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
 
     resampler_audio.SetMode(true, 0, false);
@@ -208,7 +177,6 @@ void core1_entry() {
         static audio_raw_element audio_element{};
         queue_remove_blocking(&audio_fifo, &audio_element);
 
-        // Resample 512 -> 480 frames to fix noise. Credit: @Junhoo
         WDL_ResampleSample *in_buf;
         int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
         for (int i = 0; i < nframes * 2; i++) {
