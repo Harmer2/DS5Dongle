@@ -2,7 +2,7 @@
 
 [中文](./README.CN.md)
 
-> Turn a Raspberry Pi Pico2W into a wireless adapter for the DualSense (DS5) controller.
+> Turn a Waveshare RP2350B-Plus-WW into a wireless adapter for the DualSense (DS5) controller.
 
 ## Overview
 
