@@ -1,5 +1,6 @@
 // Created by awalol on 2026/3/5.
 // v2-opt — fifo depth 2->4, cached audio_gain, Waveshare RP2350B-Plus-W
+// v5     — priority queue, new packet layout (no state_data), correct REPORT_SIZE=279
 
 #include "audio.h"
 #include "bt.h"
@@ -18,7 +19,7 @@
 #define INPUT_CHANNELS  4
 #define OUTPUT_CHANNELS 2
 #define SAMPLE_SIZE     64
-#define REPORT_SIZE     398
+#define REPORT_SIZE     279
 #define REPORT_ID       0x36
 
 #ifndef OPUS_COMPLEXITY
@@ -130,14 +131,15 @@ void audio_loop() {
         pkt[11] = 0x12 | 0 << 6 | 1 << 7;
         pkt[12] = SAMPLE_SIZE;
         memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
+        // pkt[77] = first byte after haptic_buf (13 + 64 = 77)
         pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
         pkt[78] = 200;
-
         critical_section_enter_blocking(&opus_cs);
         memcpy(pkt + 79, opus_buf, 200);
         critical_section_exit(&opus_cs);
+        // pkt[279] would be out of bounds — packet ends at pkt[278] inclusive
 
-        bt_write(pkt, sizeof(pkt), true);
+        bt_write(pkt, REPORT_SIZE, true);
         haptic_buf_pos = 0;
     }
 }
