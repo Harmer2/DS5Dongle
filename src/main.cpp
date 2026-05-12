@@ -129,15 +129,20 @@ bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_reques
     (void) rhport;
     uint8_t const itf = tu_u16_low(p_request->wIndex);
     uint8_t const alt = tu_u16_low(p_request->wValue);
-
     if (itf == 1) {
         printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
         spk_active = alt;
     }
-
     return true;
 }
-
+// Reset spk_active when USB disconnects so the next connection
+// starts clean. Without this, a stale spk_active=true from a
+// previous session blocks 0x31 output reports and no haptic
+// audio flows until the audio interface reopens.
+void tud_suspend_cb(bool remote_wakeup_en) {
+    (void) remote_wakeup_en;
+    spk_active = false;
+}
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
     (void) itf;
