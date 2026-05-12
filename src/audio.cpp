@@ -1,6 +1,6 @@
 // Created by awalol on 2026/3/5.
 // v2-opt — fifo depth 2->4, cached audio_gain, Waveshare RP2350B-Plus-W
-// v5     — priority queue, new packet layout (no state_data), correct REPORT_SIZE=279
+// v5     — audio packets routed to priority_send_fifo via bt_write(..., true)
 
 #include "audio.h"
 #include "bt.h"
@@ -19,9 +19,12 @@
 #define INPUT_CHANNELS  4
 #define OUTPUT_CHANNELS 2
 #define SAMPLE_SIZE     64
-#define REPORT_SIZE     279
+#define REPORT_SIZE     398
 #define REPORT_ID       0x36
 
+// Opus complexity is set by CMakeLists.txt OPUS_COMPLEXITY (default 4).
+// At 360 MHz Core 1 handles complexity 4 without stuttering.
+// Reduce the CMake cache variable to 2 if you observe audio dropouts.
 #ifndef OPUS_COMPLEXITY
 #define OPUS_COMPLEXITY 4
 #endif
@@ -43,12 +46,27 @@ struct audio_raw_element {
     float data[512 * 2];
 };
 
+uint8_t state_data[63] = {
+    0xfd, 0xf7, 0x0, 0x0, 0x7f, 0x7f,
+    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+    0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00,
+};
+
+void set_state_data(const uint8_t* data, const uint8_t len) {
+    memcpy(state_data, data, len);
+}
+
 void set_headset(bool state) {
     plug_headset = state;
 }
 
+// Cached audio gain — powf(10, x/20) is expensive.
+// Cache it and only recompute when volume changes.
+// Removes a powf() call from every audio_loop() tick on Core 0.
 static float cached_audio_gain     = 0.0f;
-static float cached_speaker_volume = -999.0f;
+static float cached_speaker_volume = -999.0f; // sentinel: force first compute
 
 static float get_audio_gain() {
     const float vol = get_config().speaker_volume;
@@ -83,6 +101,7 @@ void audio_loop() {
         if (audio_buf_pos == 512 * 2) {
             static audio_raw_element element{};
             memcpy(element.data, audio_buf, 512 * 2 * 4);
+            // Drop oldest frame if full rather than silently losing newest data
             if (queue_is_full(&audio_fifo)) {
                 queue_try_remove(&audio_fifo, NULL);
             }
@@ -128,18 +147,22 @@ void audio_loop() {
         pkt[9] = buf_len;
 
         pkt[10] = packetCounter++;
-        pkt[11] = 0x12 | 0 << 6 | 1 << 7;
-        pkt[12] = SAMPLE_SIZE;
-        memcpy(pkt + 13, haptic_buf, SAMPLE_SIZE);
-        // pkt[77] = first byte after haptic_buf (13 + 64 = 77)
-        pkt[77] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
-        pkt[78] = 200;
-        critical_section_enter_blocking(&opus_cs);
-        memcpy(pkt + 79, opus_buf, 200);
-        critical_section_exit(&opus_cs);
-        // pkt[279] would be out of bounds — packet ends at pkt[278] inclusive
+        pkt[11] = 0x10 | 0 << 6 | 1 << 7;
+        pkt[12] = 63;
+        memcpy(pkt + 13, state_data, sizeof(state_data));
+        pkt[76] = 0x12 | 0 << 6 | 1 << 7;
+        pkt[77] = SAMPLE_SIZE;
+        memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
+        pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
+        pkt[143] = 200;
 
-        bt_write(pkt, REPORT_SIZE, true);
+        critical_section_enter_blocking(&opus_cs);
+        memcpy(pkt + 144, opus_buf, 200);
+        critical_section_exit(&opus_cs);
+
+        // Priority flag = true — audio packets go to priority_send_fifo,
+        // ahead of HID output reports in send_fifo. This is the stutter fix.
+        bt_write(pkt, sizeof(pkt), true);
         haptic_buf_pos = 0;
     }
 }
@@ -149,7 +172,12 @@ void audio_init() {
     resampler.SetRates(48000, 3000);
     resampler.SetFeedMode(true);
     resampler.Prealloc(2, 24, 6);
+
+    // Depth 2->4 — gives Core 1 (Opus encoder) more headroom before
+    // frames are dropped. At 360 MHz Core 1 encodes ~10ms frames; depth 4
+    // covers ~40ms of burst without dropping.
     queue_init(&audio_fifo, sizeof(audio_raw_element), 4);
+
     critical_section_init(&opus_cs);
     multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
 }
@@ -179,6 +207,7 @@ void core1_entry() {
         static audio_raw_element audio_element{};
         queue_remove_blocking(&audio_fifo, &audio_element);
 
+        // Resample 512 -> 480 frames to fix noise. Credit: @Junhoo
         WDL_ResampleSample *in_buf;
         int nframes = resampler_audio.ResamplePrepare(512, 2, &in_buf);
         for (int i = 0; i < nframes * 2; i++) {
