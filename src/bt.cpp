@@ -32,7 +32,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
 static btstack_packet_callback_registration_t hci_event_callback_registration, l2cap_event_callback_registration;
 static bd_addr_t current_device_addr;
 static bool device_found = false;
-static bool new_pair = false;
+static bool new_pair = false; // 只有新匹配的设备才用创建channel，自动重连走的是service
 static hci_con_handle_t acl_handle = HCI_CON_HANDLE_INVALID;
 static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
@@ -46,7 +46,7 @@ struct send_element {
     size_t len;
 };
 
-absolute_time_t inactive_time = 0;
+absolute_time_t inactive_time = 0; // 手柄长时间静默
 
 void bt_register_data_callback(bt_data_callback_t callback) {
     bt_data_callback = callback;
@@ -77,6 +77,7 @@ bool bt_disconnect() {
 void bt_l2cap_init() {
     l2cap_event_callback_registration.callback = &l2cap_packet_handler;
     l2cap_add_event_handler(&l2cap_event_callback_registration);
+    // 修复重连后自动断开的关键点
     sdp_init();
     l2cap_register_service(l2cap_packet_handler, PSM_HID_CONTROL, MTU_CONTROL, LEVEL_2);
     l2cap_register_service(l2cap_packet_handler, PSM_HID_INTERRUPT, MTU_INTERRUPT, LEVEL_2);
@@ -89,6 +90,7 @@ int bt_init() {
 
     bt_l2cap_init();
 
+    // SSP (Secure Simple Pairing)
     gap_ssp_set_enable(true);
     gap_secure_connections_enable(true);
     gap_ssp_set_io_capability(SSP_IO_CAPABILITY_DISPLAY_YES_NO);
@@ -136,6 +138,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 hci_event_extended_inquiry_response_get_bd_addr(packet, addr);
             }
 
+            // CoD 0x002508 = Gamepad (Major: Peripheral, Minor: Gamepad)
             if ((cod & 0x000F00) == 0x000500) {
                 printf("[HCI] Gamepad found: %s (CoD: 0x%06x)\n", bd_addr_to_str(addr), (unsigned int) cod);
                 bd_addr_copy(current_device_addr, addr);
@@ -163,6 +166,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             }
             break;
         }
+
         case HCI_EVENT_COMMAND_STATUS: {
             const uint8_t status = hci_event_command_status_get_status(packet);
             const uint16_t opcode = hci_event_command_status_get_command_opcode(packet);
@@ -238,4 +242,284 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
-            const uint8_t status =
+            const uint8_t status = hci_event_authentication_complete_get_status(packet);
+            const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
+            printf("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
+            if (status != ERROR_CODE_SUCCESS) {
+                printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
+                gap_drop_link_key_for_bd_addr(current_device_addr);
+            } else {
+                hci_send_cmd(&hci_set_connection_encryption, handle, 1);
+            }
+            break;
+        }
+
+        case HCI_EVENT_ENCRYPTION_CHANGE: {
+            const uint8_t status = hci_event_encryption_change_get_status(packet);
+            const hci_con_handle_t handle = hci_event_encryption_change_get_connection_handle(packet);
+            const uint8_t enabled = hci_event_encryption_change_get_encryption_enabled(packet);
+            printf("[HCI] Encryption change handle=0x%04X status=0x%02X enabled=%u\n", handle, status, enabled);
+            if (status == ERROR_CODE_SUCCESS && enabled) {
+                printf("[L2CAP] Open HID channels\n");
+                if (new_pair) {
+                    if (hid_control_cid == 0) {
+                        l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_CONTROL, MTU_CONTROL,
+                                             &hid_control_cid);
+                    } else if (hid_interrupt_cid == 0) {
+                        l2cap_create_channel(l2cap_packet_handler, current_device_addr, PSM_HID_INTERRUPT,
+                                             MTU_INTERRUPT,
+                                             &hid_interrupt_cid);
+                    }
+                }
+            }
+            break;
+        }
+
+        case HCI_EVENT_CONNECTION_REQUEST: {
+            bd_addr_t addr;
+            hci_event_connection_request_get_bd_addr(packet, addr);
+            const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
+            printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
+            if ((cod & 0x000F00) == 0x000500) {
+                bd_addr_copy(current_device_addr, addr);
+                gap_inquiry_stop();
+                hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
+            }
+            break;
+        }
+
+        case HCI_EVENT_DISCONNECTION_COMPLETE: {
+#if !ENABLE_SERIAL
+            tud_disconnect();
+#endif
+            gap_connectable_control(1);
+            gap_discoverable_control(1);
+            const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
+            device_found = false;
+            new_pair = false;
+            acl_handle = HCI_CON_HANDLE_INVALID;
+            hid_control_cid = 0;
+            hid_interrupt_cid = 0;
+            feature_data.clear();
+            cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
+            printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
+            gap_inquiry_start(30);
+            break;
+        }
+    }
+}
+
+static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *packet, uint16_t size) {
+    (void) channel;
+
+    if (packet_type == L2CAP_DATA_PACKET) {
+        if (channel == hid_interrupt_cid) {
+            bt_data_callback(INTERRUPT, packet, size);
+
+            // 静默检测
+            if (get_config().disable_inactive_disconnect) {
+                return;
+            }
+            if (packet[3] < 120 || packet[3] > 140) {
+                inactive_time = get_absolute_time();
+            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > get_config().inactive_time * 60 *
+                       1000 * 1000) {
+                printf("disconnect when inactive\n");
+                inactive_time = get_absolute_time();
+                // Arm the 1.5 s visual warning on GPIO23 before disconnecting.
+                // status_led_tick() in the main loop calls bt_disconnect()
+                // after the blink completes. Guard prevents re-arming if
+                // a warning is already in progress.
+                if (!status_led_disconnect_pending()) {
+                    status_led_warn_disconnect();
+                }
+            }
+        } else if (channel == hid_control_cid) {
+            if (check_dse) {
+                if (packet[0] == 0xA3 && packet[1] == 0x70) {
+                    printf("Connected DSE Controller\n");
+                    check_dse = false;
+                    is_dse = true;
+#if !ENABLE_SERIAL
+                    tud_connect();
+#endif
+                } else if (packet[0] == 0x02) {
+                    printf("Connected DS5 Controller\n");
+                    check_dse = false;
+                    is_dse = false;
+#if !ENABLE_SERIAL
+                    tud_connect();
+#endif
+                }
+            }
+            if (packet[0] == 0xA3) {
+                uint8_t report_id = packet[1];
+                feature_data[report_id].assign(packet + 1, packet + size);
+                printf("[L2CAP] Stored Feature Report 0x%02X, len=%u\n", report_id, size - 1);
+            }
+            printf("[L2CAP] HID Control data len=%u\n", size);
+            printf_hexdump(packet, size);
+            bt_data_callback(CONTROL, packet, size);
+        } else {
+            printf("[L2CAP] Data on unknown channel 0x%04X (Interrupt: 0x%04X, Control: 0x%04X)\n",
+                   channel, hid_interrupt_cid, hid_control_cid);
+        }
+        return;
+    }
+
+    const uint8_t event_type = hci_event_packet_get_type(packet);
+    switch (event_type) {
+        case L2CAP_EVENT_CHANNEL_OPENED: {
+            const uint8_t status = l2cap_event_channel_opened_get_status(packet);
+            const uint16_t local_cid = l2cap_event_channel_opened_get_local_cid(packet);
+            if (status == 0) {
+                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+                if (psm == PSM_HID_CONTROL) {
+                    printf("[L2CAP] HID Control opened cid=0x%04X\n", local_cid);
+                    hid_control_cid = local_cid;
+                } else if (psm == PSM_HID_INTERRUPT) {
+                    printf("[L2CAP] HID Interrupt opened cid=0x%04X\n", local_cid);
+                    hid_interrupt_cid = local_cid;
+
+                    if (!get_config().disable_pico_led) {
+                        cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, true);
+                    }
+                    inactive_time = get_absolute_time();
+
+                    printf("Init DualSense\n");
+
+                    init_feature();
+                    // 初始化手柄状态
+                    uint8_t report32[142];
+                    report32[0] = 0x32;
+                    report32[1] = 0x10;
+                    uint8_t packet_0x10[] =
+                    {
+                        0x90,
+                        0x3f,
+                        0xfd, 0xf7, 0x0, 0x0,
+                        0x7f, 0x7f,
+                        0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
+                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
+                        0x7, 0x0, 0x0, 0x2, 0x1,
+                        0x00,
+                        0xff, 0xd7, 0x00
+                    };
+                    memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
+                    bt_write(report32, sizeof(report32));
+                } else {
+                    printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
+                }
+            } else {
+                const uint16_t psm = l2cap_event_channel_opened_get_psm(packet);
+                hid_control_cid = 0;
+                hid_interrupt_cid = 0;
+                device_found = false;
+                printf("[L2CAP] Open failed psm=0x%04X status=0x%02X\n", psm, status);
+                bt_disconnect();
+            }
+            break;
+        }
+
+        case L2CAP_EVENT_INCOMING_CONNECTION: {
+            const uint16_t local_cid = l2cap_event_incoming_connection_get_local_cid(packet);
+            const uint16_t psm = l2cap_event_incoming_connection_get_psm(packet);
+            printf("[L2CAP] Incoming connection psm=0x%04X cid=0x%04X\n", psm, local_cid);
+            l2cap_accept_connection(local_cid);
+            break;
+        }
+
+        case L2CAP_EVENT_CHANNEL_CLOSED: {
+            const uint16_t local_cid = l2cap_event_channel_closed_get_local_cid(packet);
+            if (local_cid == hid_control_cid) {
+                hid_control_cid = 0;
+                printf("[L2CAP] HID Control closed cid=0x%04X\n", local_cid);
+            } else if (local_cid == hid_interrupt_cid) {
+                hid_interrupt_cid = 0;
+                printf("[L2CAP] HID Interrupt closed cid=0x%04X\n", local_cid);
+            } else {
+                printf("[L2CAP] Channel closed cid=0x%04X\n", local_cid);
+            }
+            if (hid_control_cid == 0 && hid_interrupt_cid == 0) {
+                bt_disconnect();
+            }
+            break;
+        }
+
+        case L2CAP_EVENT_CAN_SEND_NOW: {
+            static send_element send_packet{};
+            if (queue_try_remove(&send_fifo, &send_packet)) {
+                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
+                if (status != 0) {
+                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
+                }
+            }
+            if (!queue_is_empty(&send_fifo)) {
+                l2cap_request_can_send_now_event(hid_interrupt_cid);
+            }
+            break;
+        }
+    }
+}
+
+void bt_write(uint8_t *data, uint16_t len) {
+    if (hid_interrupt_cid == 0) return;
+    static send_element packet{};
+    memset(packet.data, 0, 512);
+    packet.len = len + 1;
+    packet.data[0] = 0xA2;
+    memcpy(packet.data + 1, data, len);
+    fill_output_report_checksum(packet.data + 1, len);
+
+    if (!queue_try_add(&send_fifo, &packet)) {
+        printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
+        return;
+    }
+    if (queue_get_level(&send_fifo) == 1) {
+        l2cap_request_can_send_now_event(hid_interrupt_cid);
+    }
+}
+
+vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
+    auto ret = vector<uint8_t>{};
+    if (feature_data.contains(reportId)) {
+        ret = feature_data[reportId];
+    }
+    if (!feature_data.contains(reportId) ||
+        reportId == 0x81 ||
+        reportId == 0x63 ||
+        reportId == 0x65 ||
+        reportId == 0x64
+    ) {
+        if (hid_control_cid != 0) {
+            uint8_t get_feature[] = {0x43, reportId};
+            l2cap_send(hid_control_cid, get_feature, sizeof(get_feature));
+            printf("[L2CAP] Requesting Get Feature Report 0x%02X\n", reportId);
+        }
+    }
+    return ret;
+}
+
+void set_feature_data(uint8_t reportId, uint8_t *data, uint16_t len) {
+    if (hid_control_cid != 0) {
+        uint8_t get_feature[len + 2];
+        get_feature[0] = 0x53;
+        get_feature[1] = reportId;
+        memcpy(get_feature + 2, data, len);
+        fill_feature_report_checksum(get_feature + 1, len + 1);
+        l2cap_send(hid_control_cid, get_feature, len + 2);
+        printf("[L2CAP] Requesting Set Feature Report 0x%02X\n", reportId);
+        printf_hexdump(get_feature, len + 2);
+    }
+}
+
+void init_feature() {
+    get_feature_data(0x09, 20);
+    get_feature_data(0x20, 64);
+    get_feature_data(0x22, 64);
+    get_feature_data(0x05, 41);
+    check_dse = true;
+    get_feature_data(0x70, 64);
+}
