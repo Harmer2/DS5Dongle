@@ -9,6 +9,7 @@
 
 void audio_init();
 void audio_loop();
+void audio_reset_opus_buf();
 void core1_entry();
 void set_headset(bool state);
 void set_state_data(const uint8_t* data, const uint8_t len);
