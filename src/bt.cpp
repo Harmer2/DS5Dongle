@@ -2,6 +2,7 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "audio.h"
 #include <cstdio>
 #include <cstring>
 #include "bt.h"
