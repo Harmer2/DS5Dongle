@@ -62,6 +62,12 @@ void set_headset(bool state) {
     plug_headset = state;
 }
 
+void audio_reset_opus_buf() {
+    critical_section_enter_blocking(&opus_cs);
+    memset(opus_buf, 0, sizeof(opus_buf));
+    critical_section_exit(&opus_cs);
+}
+
 // Cached audio gain — powf(10, x/20) is expensive.
 // Cache it and only recompute when volume changes.
 // Removes a powf() call from every audio_loop() tick on Core 0.
