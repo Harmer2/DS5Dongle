@@ -62,12 +62,6 @@ void set_headset(bool state) {
     plug_headset = state;
 }
 
-void audio_reset_opus_buf() {
-    critical_section_enter_blocking(&opus_cs);
-    memset(opus_buf, 0, sizeof(opus_buf));
-    critical_section_exit(&opus_cs);
-}
-
 // Cached audio gain — powf(10, x/20) is expensive.
 // Cache it and only recompute when volume changes.
 // Removes a powf() call from every audio_loop() tick on Core 0.
@@ -84,30 +78,7 @@ static float get_audio_gain() {
 }
 
 void audio_loop() {
-    static uint32_t silence_ticks = 0;
-
-    if (!tud_audio_available()) {
-        if (++silence_ticks == 10) {
-            uint8_t pkt[REPORT_SIZE]{};
-            pkt[0] = REPORT_ID;
-            pkt[1] = reportSeqCounter << 4;
-            reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-            pkt[2] = 0x11 | 0 << 6 | 1 << 7;
-            pkt[3] = 7;
-            pkt[4] = 0b11111110;
-            const auto buf_len = get_config().audio_buffer_length;
-            pkt[5] = buf_len; pkt[6] = buf_len; pkt[7] = buf_len;
-            pkt[8] = buf_len; pkt[9] = buf_len;
-            pkt[10] = packetCounter++;
-            pkt[11] = 0x10 | 0 << 6 | 1 << 7;
-            pkt[12] = 63;
-            memcpy(pkt + 13, state_data, sizeof(state_data));
-            // pkt[144..343] stays zero — DS5 decodes as silence
-            bt_write(pkt, sizeof(pkt), true);
-        }
-        return;
-    }
-    silence_ticks = 0;
+    if (!tud_audio_available()) return;
 
     int16_t  raw[192];
     uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
