@@ -37,6 +37,7 @@ static uint16_t hid_control_cid;
 static uint16_t hid_interrupt_cid;
 static bt_data_callback_t bt_data_callback = nullptr;
 static bool check_dse = false;
+static bool usb_connected = false;
 unordered_map<uint8_t, vector<uint8_t> > feature_data;
 queue_t send_fifo;
 queue_t priority_send_fifo;
@@ -285,9 +286,6 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
         }
 
         case HCI_EVENT_DISCONNECTION_COMPLETE: {
-#if !ENABLE_SERIAL
-            tud_disconnect();
-#endif
             gap_connectable_control(1);
             gap_discoverable_control(1);
             const uint8_t reason = hci_event_disconnection_complete_get_reason(packet);
@@ -335,14 +333,14 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     check_dse = false;
                     is_dse = true;
 #if !ENABLE_SERIAL
-                    tud_connect();
+                    if (!usb_connected) { usb_connected = true; tud_connect(); }
 #endif
                 } else if (packet[0] == 0x02) {
                     printf("Connected DS5 Controller\n");
                     check_dse = false;
                     is_dse = false;
 #if !ENABLE_SERIAL
-                    tud_connect();
+                    if (!usb_connected) { usb_connected = true; tud_connect(); }
 #endif
                 }
             }
