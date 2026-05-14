@@ -2,6 +2,7 @@
 // Created by awalol on 2026/3/4.
 //
 
+#include "audio.h"
 #include <cstdio>
 #include <cstring>
 #include "bt.h"
@@ -297,6 +298,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             feature_data.clear();
             while (queue_try_remove(&send_fifo, NULL)) {}
             while (queue_try_remove(&priority_send_fifo, NULL)) {}
+            audio_reset_opus_buf();
             cyw43_arch_gpio_put(CYW43_WL_GPIO_LED_PIN, false);
             status_led_notify_disconnect(reason);
             printf("[HCI] Disconnected reason=0x%02X, start inquiry\n", reason);
