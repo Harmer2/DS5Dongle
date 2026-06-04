@@ -393,7 +393,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     report32[1] = 0x10;
                     report32[2] = 0x10 | 0 << 6 | 1 << 7;
                     report32[3] = 0x3f;
-                    state_set(report32 + 4, sizeof(SetStateData));
+                    state_set(report32 + 4, 63);
                     bt_write(report32, sizeof(report32), false);
                 } else {
                     printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
