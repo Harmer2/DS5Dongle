@@ -148,7 +148,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
 
     if (report_id == 0) {
         switch (buffer[0]) {
-            case 0x02: {
+           case 0x02: {
                 uint8_t outputData[78];
                 outputData[0] = 0x31;
                 outputData[1] = reportSeqCounter << 4;
@@ -157,11 +157,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 outputData[2] = 0x10;
                 
-                // 1. Update the background cache using the true Sony layout so the audio loop stays in sync
-                state_update_from_game(buffer + 1, bufsize - 1);
-                
-                // 2. Direct copy the untouched data so DS4Windows & Sony game features pass through 100% intact
-                std::memcpy(outputData + 3, buffer + 1, bufsize - 1 < 63 ? bufsize - 1 : 63);
+                state_update(buffer + 1, bufsize - 1);
+                memcpy(outputData + 3, buffer + 1, bufsize - 1);
                 
                 bt_write(outputData, sizeof(outputData));
                 break;
