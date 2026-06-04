@@ -157,7 +157,7 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 outputData[2] = 0x10;
                 state_update(buffer + 1, bufsize - 1);
-                state_set(outputData + 3, sizeof(SetStateData));
+                state_set(outputData + 3, 63);
                 break;
             }
         }
