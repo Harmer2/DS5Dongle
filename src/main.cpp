@@ -23,6 +23,7 @@
 #include "config.h"
 #include "cmd.h"
 #include "pico/critical_section.h"
+#include "state_mgr.h"
 
 #if ENABLE_BATT_LED
 #include "battery_led.h"
@@ -155,8 +156,8 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     reportSeqCounter = 0;
                 }
                 outputData[2] = 0x10;
-                memcpy(outputData + 3, buffer + 1, bufsize - 1);
-                bt_write(outputData, sizeof(outputData));
+                state_update(buffer + 1, bufsize - 1);
+                state_set(outputData + 3, sizeof(SetStateData));
                 break;
             }
         }
@@ -237,7 +238,8 @@ int main() {
     bt_register_data_callback(on_bt_data);
 
     audio_init();
-
+    state_init();
+    
 #if !ENABLE_SERIAL
     watchdog_enable(1000, true);
 #endif
