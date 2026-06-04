@@ -1,256 +1,73 @@
 //
-// Created by awalol on 2026/5/15.
-// Fully restored structure layout for older forks.
+// Robust State Manager for DS5Dongle (Waveshare RP2350B-Plus-W)
+// Bridges game/DS4Windows states cleanly into high-frequency audio reports.
 //
 
-#include <cstddef>
 #include <cstring>
-#include <cstdio>
 #include <cstdint>
-
-#include "utils.h"
+#include <cstdio>
 #include "state_mgr.h"
-
-// Define the official packed Sony DualSense Output Report structure layout
-#pragma pack(push, 1)
-struct SetStateData {
-    // Byte 0
-    uint8_t EnableRumbleEmulation : 1;
-    uint8_t UseRumbleNotHaptics : 1;
-    uint8_t AllowHeadphoneVolume : 1;
-    uint8_t AllowSpeakerVolume : 1;
-    uint8_t AllowMicVolume : 1;
-    uint8_t AllowAudioControl : 1;
-    uint8_t AllowMuteLight : 1;
-    uint8_t AllowAudioMute : 1;
-
-    // Byte 1
-    uint8_t AllowRightTriggerFFB : 1;
-    uint8_t AllowLeftTriggerFFB : 1;
-    uint8_t AllowHeadphoneBalance : 1;
-    uint8_t AllowAudioControl2 : 1;
-    uint8_t AllowHapticLowPassFilter : 1;
-    uint8_t AllowMotorPowerLevel : 1;
-    uint8_t AllowColorLightFadeAnimation : 1;
-    uint8_t AllowLightBrightnessChange : 1;
-
-    // Byte 2
-    uint8_t AllowPlayerIndicators : 1;
-    uint8_t AllowLedColor : 1;
-    uint8_t EnableImprovedRumbleEmulation : 1;
-    uint8_t padding_flags : 5;
-
-    // Byte 3
-    uint8_t RumbleEmulationRight;
-    uint8_t RumbleEmulationLeft;
-
-    // Byte 5
-    uint8_t VolumeHeadphones;
-    uint8_t VolumeSpeaker;
-    uint8_t VolumeMic;
-    uint8_t AudioControl;
-    uint8_t MuteLightMode;
-    uint8_t AudioMute;
-
-    // Byte 11
-    uint8_t RightTriggerFFB[11];
-    // Byte 22
-    uint8_t LeftTriggerFFB[11];
-
-    // Byte 33
-    uint8_t HeadphoneBalance;
-    uint8_t AudioControl2;
-
-    // Byte 35
-    uint32_t HostTimestamp;
-
-    // Byte 39
-    uint8_t MotorPowerLevel;
-    // Byte 40
-    uint8_t HapticLowPassFilter;
-    // Byte 41
-    uint8_t ReservedPadding;
-
-    // Byte 42
-    uint8_t LightFadeAnimation;
-    // Byte 43
-    uint8_t LightBrightness;
-    // Byte 44
-    uint8_t PlayerIndicators;
-
-    // Byte 45
-    uint8_t LedRed;
-    uint8_t LedGreen;
-    uint8_t LedBlue;
-};
-#pragma pack(pop)
-
-namespace {
-    constexpr size_t kAudioControlOffset = offsetof(SetStateData, MuteLightMode) - sizeof(uint8_t);
-    constexpr size_t kMuteControlOffset = offsetof(SetStateData, RightTriggerFFB) - sizeof(uint8_t);
-    constexpr size_t kMotorPowerLevelOffset = offsetof(SetStateData, HostTimestamp) + sizeof(uint32_t);
-    constexpr size_t kAudioControl2Offset = kMotorPowerLevelOffset + sizeof(uint8_t);
-    constexpr size_t kHapticLowPassFilterOffset = offsetof(SetStateData, LightFadeAnimation) - 2 * sizeof(uint8_t);
-    constexpr size_t kPlayerIndicatorsOffset = offsetof(SetStateData, LedRed) - sizeof(uint8_t);
-}
 
 static constexpr uint8_t state_init_data[63] = {
     0xfd, 0xf7, 0x0, 0x0,
-    0x7f, 0x64, // Headphones, Speaker
+    0x7f, 0x64, // Headphones, Speaker volumes
     0xff, 0x9, 0x0, 0x0F, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
     0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
     0x7, 0x0, 0x0, 0x2, 0x1,
     0x00,
-    0xff, 0xd7, 0x00 // RGB LED: R, G, B (Nijika Color!)✨
+    0xff, 0xd7, 0x00 // Default startup color (Orange)
 };
 
 uint8_t state[63]{};
 
 void state_init() {
-    memcpy(state, state_init_data, sizeof(state));
+    std::memcpy(state, state_init_data, sizeof(state));
 }
 
 void state_set(uint8_t *data, const uint8_t size) {
-    if (size > 63) {
-        printf("[StateMgr] Warning: State Set over 63 bytes\n");
-    }
-    memcpy(data, state, size > 63 ? 63 : size);
+    std::memcpy(data, state, size > 63 ? 63 : size);
 }
 
 void state_update(const uint8_t *data, const uint8_t size) {
-    if (size < sizeof(SetStateData)) {
-        printf(
-            "[StateMgr] Error: SetStateData at least %u bytes\n",
-            static_cast<unsigned>(sizeof(SetStateData))
-        );
-        return;
-    }
-
-    SetStateData update{};
-    memcpy(&update, data, sizeof(update));
-
-    const auto copy_if_allowed = [&](const bool allowed, const size_t offset, const size_t length) {
-        if (allowed) {
-            memcpy(state + offset, data + offset, length);
-        }
-    };
-    auto set_bit = [](uint8_t &byte, const int bit, const bool value) {
-        byte = (byte & ~(1 << bit)) | (value << bit);
-    };
-
-    set_bit(state[0], 0, update.EnableRumbleEmulation);
-    set_bit(state[0], 1, update.UseRumbleNotHaptics);
-    set_bit(state[38], 2, update.EnableImprovedRumbleEmulation);
-    copy_if_allowed(
-        update.UseRumbleNotHaptics || update.EnableRumbleEmulation,
-        offsetof(SetStateData, RumbleEmulationRight),
-        2
-    );
-
-    /*copy_if_allowed(
-        update.AllowHeadphoneVolume,
-        offsetof(SetStateData, VolumeHeadphones),
-        sizeof(update.VolumeHeadphones)
-    );*/
-    /*copy_if_allowed(
-        update.AllowSpeakerVolume,
-        offsetof(SetStateData, VolumeSpeaker),
-        sizeof(update.VolumeSpeaker)
-    );*/
-    /*copy_if_allowed(
-        update.AllowMicVolume,
-        offsetof(SetStateData, VolumeMic),
-        sizeof(update.VolumeMic)
-    );*/
-    /*copy_if_allowed(
-        update.AllowAudioControl,
-        kAudioControlOffset,
-        sizeof(uint8_t)
-    );*/
-
-    copy_if_allowed(
-        update.AllowMuteLight,
-        offsetof(SetStateData, MuteLightMode),
-        sizeof(update.MuteLightMode)
-    );
-
-    /*copy_if_allowed(
-        update.AllowAudioMute,
-        kMuteControlOffset,
-        sizeof(uint8_t)
-    );*/
-
-    copy_if_allowed(
-        update.AllowRightTriggerFFB,
-        offsetof(SetStateData, RightTriggerFFB),
-        sizeof(update.RightTriggerFFB)
-    );
-    copy_if_allowed(
-        update.AllowLeftTriggerFFB,
-        offsetof(SetStateData, LeftTriggerFFB),
-        sizeof(update.LeftTriggerFFB)
-    );
-
-    /*copy_if_allowed(
-        update.AllowMotorPowerLevel,
-        kMotorPowerLevelOffset,
-        sizeof(uint8_t)
-    );*/
-    /*copy_if_allowed(
-        update.AllowAudioControl2,
-        kAudioControl2Offset,
-        sizeof(uint8_t)
-    );*/
-    /*copy_if_allowed(
-        update.AllowHapticLowPassFilter,
-        kHapticLowPassFilterOffset,
-        sizeof(uint8_t)
-    );*/
-
-    copy_if_allowed(
-        update.AllowColorLightFadeAnimation,
-        offsetof(SetStateData, LightFadeAnimation),
-        sizeof(update.LightFadeAnimation)
-    );
-    copy_if_allowed(
-        update.AllowLightBrightnessChange,
-        offsetof(SetStateData, LightBrightness),
-        sizeof(update.LightBrightness)
-    );
-    copy_if_allowed(
-        update.AllowPlayerIndicators,
-        kPlayerIndicatorsOffset,
-        sizeof(uint8_t)
-    );
-    copy_if_allowed(
-        update.AllowLedColor,
-        offsetof(SetStateData, LedRed),
-        sizeof(update.LedRed) * 3
-    );
-}
-void state_update_from_game(const uint8_t *data, uint16_t size) {
     if (size < 48) return;
 
-    // 1. Sync USB activation flags directly to their proper Bluetooth cache registers
-    state[0] = data[0];  // valid_flag0 (Rumble)
-    state[1] = data[1];  // valid_flag1 (Adaptive Triggers)
-    state[38] = data[2]; // valid_flag2 (Lightbar/LEDs) -> Shifted to byte 38 on Bluetooth
+    // 1. Sync primary Sony hardware control flags
+    state[0] = data[0]; // valid_flag0 (Rumble/Haptics)
+    state[1] = data[1]; // valid_flag1 (Adaptive Triggers)
+    state[2] = data[2]; // valid_flag2 (Lightbar/LEDs)
 
-    // 2. Sync Rumble Motors
-    state[3] = data[3];  // Right Motor strength
-    state[4] = data[4];  // Left Motor strength
+    // 2. FORCE DualSense Rumble Emulation DSP Compatibility
+    // Tells the controller to translate motor bytes into haptic thumps 
+    // while the high-speed 0x36 audio stream is running.
+    if (data[0] & 0x01) { 
+        state[0] |= 0x03;  // Force Rumble Emulation bits ON
+        state[38] |= 0x04; // Force Improved Rumble Emulation bit ON
+    }
 
-    // 3. Sync Adaptive Triggers
-    std::memcpy(state + 11, data + 11, 11); // Right Trigger configuration
-    std::memcpy(state + 22, data + 22, 11); // Left Trigger configuration
+    // 3. Sync standard rumble motor bytes
+    state[3] = data[3]; // Right Motor Strength
+    state[4] = data[4]; // Left Motor Strength
 
-    // 4. Sync Lightbar & LED Profiles
-    state[42] = data[42]; // Light Fade Animation
-    state[43] = data[43]; // Light Brightness
-    state[44] = data[44]; // Player Indicators
-    state[45] = data[45]; // LED Red
-    state[46] = data[46]; // LED Green
-    state[47] = data[47]; // LED Blue
+    // 4. Sync Adaptive Trigger Configurations (11 bytes each)
+    if (data[1] & 0x01) std::memcpy(state + 11, data + 11, 11);
+    if (data[1] & 0x02) std::memcpy(state + 22, data + 22, 11);
+
+    // 5. Sync Microphone / Mute Button LED
+    if (data[1] & 0x40) state[9] = data[9];
+
+    // 6. Sync Lightbar Customizations (Fade, Brightness, Indicators)
+    if (data[2] & 0x01) state[44] = data[44]; // Player Indicators
+    if (data[2] & 0x04) state[42] = data[42]; // Light Fade
+    if (data[2] & 0x08) state[43] = data[43]; // Light Brightness
+
+    // 7. Sync DS4Windows Custom Lightbar Colors (RGB Channels)
+    // If a custom color profile is present, force the activation flag ON
+    if ((data[2] & 0x02) || data[45] != 0 || data[46] != 0 || data[47] != 0) {
+        state[2] |= 0x02;     // Explicitly keep the LED modification flag alive
+        state[45] = data[45]; // Red channel
+        state[46] = data[46]; // Green channel
+        state[47] = data[47]; // Blue channel
+    }
 }
