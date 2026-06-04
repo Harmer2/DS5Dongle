@@ -191,24 +191,22 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     (void) instance;
     (void) len;
 }
-// HID output report from host — contains rumble, LED, trigger effect data.
-// Report ID 0x05 = SetStateData (63 bytes of controller state).
-// Without this callback rumble is never forwarded to the DualSense.
-bool tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
+// HID output report from host — rumble, LED, trigger effects.
+// Report ID 0x05 = SetStateData (up to 63 bytes).
+// TinyUSB declares this as void — do NOT change the return type.
+void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
                             hid_report_type_t report_type,
                             uint8_t const* buffer, uint16_t bufsize) {
     (void) instance;
     (void) report_type;
 
-    if (report_id == 0x05 &amp;&amp; bufsize &gt;= 47) {
-        // buffer[0..46] = SetStateData payload (without report ID prefix)
-        set_state_data(buffer, bufsize &lt; 63 ? bufsize : 63);
-        // Send immediately to controller — do not wait for next audio tick
-        uint8_t report[142]{};
+    if (report_id == 0x05 && bufsize >= 47) {
+        set_state_data(buffer, (uint8_t)(bufsize < 63 ? bufsize : 63));
+        // Send immediately — do not wait for the next audio tick
+        uint8_t report[142] = {};
         report[0] = 0x32;
         report[1] = 0x10;
         memcpy(report + 2, state_data, sizeof(state_data));
         bt_write(report, sizeof(report), false);
     }
-    return true;
 }
