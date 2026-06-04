@@ -156,8 +156,13 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                     reportSeqCounter = 0;
                 }
                 outputData[2] = 0x10;
+                
+                // 1. Update Awalol's state manager so the audio loop doesn't overwrite rumble
                 state_update(buffer + 1, bufsize - 1);
-                state_set(outputData + 3, 63);
+                
+                // 2. Direct copy the raw data so DS4Windows & lightbar stay 100% intact
+                memcpy(outputData + 3, buffer + 1, bufsize - 1);
+                
                 bt_write(outputData, sizeof(outputData));
                 break;
             }
