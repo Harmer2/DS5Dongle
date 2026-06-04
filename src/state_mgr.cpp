@@ -1,6 +1,6 @@
 //
 // Created by awalol on 2026/5/15.
-// Adapted for older USBGetStateData forks.
+// Fully restored structure layout for older forks.
 //
 
 #include <cstddef>
@@ -11,8 +11,79 @@
 #include "utils.h"
 #include "state_mgr.h"
 
-// This bridges Awalol's new file layout with your fork's exact structure definition
-using SetStateData = USBGetStateData;
+// Define the official packed Sony DualSense Output Report structure layout
+#pragma pack(push, 1)
+struct SetStateData {
+    // Byte 0
+    uint8_t EnableRumbleEmulation : 1;
+    uint8_t UseRumbleNotHaptics : 1;
+    uint8_t AllowHeadphoneVolume : 1;
+    uint8_t AllowSpeakerVolume : 1;
+    uint8_t AllowMicVolume : 1;
+    uint8_t AllowAudioControl : 1;
+    uint8_t AllowMuteLight : 1;
+    uint8_t AllowAudioMute : 1;
+
+    // Byte 1
+    uint8_t AllowRightTriggerFFB : 1;
+    uint8_t AllowLeftTriggerFFB : 1;
+    uint8_t AllowHeadphoneBalance : 1;
+    uint8_t AllowAudioControl2 : 1;
+    uint8_t AllowHapticLowPassFilter : 1;
+    uint8_t AllowMotorPowerLevel : 1;
+    uint8_t AllowColorLightFadeAnimation : 1;
+    uint8_t AllowLightBrightnessChange : 1;
+
+    // Byte 2
+    uint8_t AllowPlayerIndicators : 1;
+    uint8_t AllowLedColor : 1;
+    uint8_t EnableImprovedRumbleEmulation : 1;
+    uint8_t padding_flags : 5;
+
+    // Byte 3
+    uint8_t RumbleEmulationRight;
+    uint8_t RumbleEmulationLeft;
+
+    // Byte 5
+    uint8_t VolumeHeadphones;
+    uint8_t VolumeSpeaker;
+    uint8_t VolumeMic;
+    uint8_t AudioControl;
+    uint8_t MuteLightMode;
+    uint8_t AudioMute;
+
+    // Byte 11
+    uint8_t RightTriggerFFB[11];
+    // Byte 22
+    uint8_t LeftTriggerFFB[11];
+
+    // Byte 33
+    uint8_t HeadphoneBalance;
+    uint8_t AudioControl2;
+
+    // Byte 35
+    uint32_t HostTimestamp;
+
+    // Byte 39
+    uint8_t MotorPowerLevel;
+    // Byte 40
+    uint8_t HapticLowPassFilter;
+    // Byte 41
+    uint8_t ReservedPadding;
+
+    // Byte 42
+    uint8_t LightFadeAnimation;
+    // Byte 43
+    uint8_t LightBrightness;
+    // Byte 44
+    uint8_t PlayerIndicators;
+
+    // Byte 45
+    uint8_t LedRed;
+    uint8_t LedGreen;
+    uint8_t LedBlue;
+};
+#pragma pack(pop)
 
 namespace {
     constexpr size_t kAudioControlOffset = offsetof(SetStateData, MuteLightMode) - sizeof(uint8_t);
