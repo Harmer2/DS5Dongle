@@ -56,11 +56,6 @@ uint8_t state_data[63] = {
 
 void set_state_data(const uint8_t* data, const uint8_t len) {
     memcpy(state_data, data, len);
-    // hotfix: mirror upstream 0ed05d3 — set EnableRumbleEmulation (bit 0)
-    // whenever UseRumbleNotHaptics (bit 1) is set
-    if (state_data[0] & (1 << 1)) {
-        state_data[0] |= (1 << 0);
-    }
 }
 
 void set_headset(bool state) {
