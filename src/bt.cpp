@@ -85,7 +85,7 @@ void bt_l2cap_init() {
 
 int bt_init() {
     queue_init(&send_fifo, sizeof(send_element), 20);
-    queue_init(&priority_send_fifo, sizeof(send_element), 10);
+    queue_init(&priority_send_fifo, sizeof(send_element), 20);
 
     bt_l2cap_init();
 
@@ -324,8 +324,7 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                 packet[7] > 0 || packet[8] > 0 ||
                 packet[10] != 0x08 || packet[11] != 0x00 || packet[12] != 0x00) {
                 inactive_time = get_absolute_time();
-            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) > get_config().inactive_time * 60 *
-                       1000 * 1000) {
+            } else if (absolute_time_diff_us(inactive_time, get_absolute_time()) &gt; (int64_t)get_config().inactive_time * 60 * 1000 * 1000) {
                 printf("disconnect when inactive\n");
                 inactive_time = get_absolute_time();
                 if (!status_led_disconnect_pending()) {
@@ -445,30 +444,32 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
             break;
         }
 
-        case L2CAP_EVENT_CAN_SEND_NOW: {
-            send_element send_packet{};
-            bool get_data = false;
-            if (!queue_is_empty(&priority_send_fifo)) {
-                get_data = queue_try_remove(&priority_send_fifo, &send_packet);
-            } else {
-                get_data = queue_try_remove(&send_fifo, &send_packet);
-            }
-            if (get_data) {
-                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
-                if (status != 0) {
-                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
-                    // Send failed — put packet back at front of priority queue
-                    // so it is retried on the next CAN_SEND_NOW event
-                    queue_try_add(&priority_send_fifo, &send_packet);
-                }
-            }
-            // Always re-request if anything is waiting — prevents drain loop
-            // from stalling permanently after a send error or queue backup
-            if (!queue_is_empty(&priority_send_fifo) || !queue_is_empty(&send_fifo)) {
-                l2cap_request_can_send_now_event(hid_interrupt_cid);
-            }
+case L2CAP_EVENT_CAN_SEND_NOW: {
+    send_element send_packet{};
+    bool get_data = false;
+    if (!queue_is_empty(&amp;priority_send_fifo)) {
+        get_data = queue_try_remove(&amp;priority_send_fifo, &amp;send_packet);
+    } else {
+        get_data = queue_try_remove(&amp;send_fifo, &amp;send_packet);
+    }
+    if (get_data) {
+        const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
+        if (status == BTSTACK_ACL_BUFFERS_FULL) {
+            // BT ACL buffer full — re-request immediately, do NOT re-queue
+            // (l2cap_send consumed nothing; packet is already gone from our queue,
+            //  just re-request and the next CAN_SEND_NOW will drain normally)
+            l2cap_request_can_send_now_event(hid_interrupt_cid);
             break;
         }
+        if (status != ERROR_CODE_SUCCESS) {
+            printf("[L2CAP] Send error 0x%02X, dropping\n", status);
+        }
+    }
+    if (!queue_is_empty(&amp;priority_send_fifo) || !queue_is_empty(&amp;send_fifo)) {
+        l2cap_request_can_send_now_event(hid_interrupt_cid);
+    }
+    break;
+}
     }
 }
 
