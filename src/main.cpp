@@ -157,11 +157,11 @@ void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t rep
                 }
                 outputData[2] = 0x10;
                 
-                // 1. Update Awalol's state manager so the audio loop doesn't overwrite rumble
-                state_update(buffer + 1, bufsize - 1);
+                // 1. Update the background cache using the true Sony layout so the audio loop stays in sync
+                state_update_from_game(buffer + 1, bufsize - 1);
                 
-                // 2. Direct copy the raw data so DS4Windows & lightbar stay 100% intact
-                memcpy(outputData + 3, buffer + 1, bufsize - 1);
+                // 2. Direct copy the untouched data so DS4Windows & Sony game features pass through 100% intact
+                std::memcpy(outputData + 3, buffer + 1, bufsize - 1 < 63 ? bufsize - 1 : 63);
                 
                 bt_write(outputData, sizeof(outputData));
                 break;
