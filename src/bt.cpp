@@ -18,6 +18,7 @@
 #include "config.h"
 #include "pico/util/queue.h"
 #include "status_led.h"
+#include "state_mgr.h"
 
 #define MTU_CONTROL 256
 #define MTU_INTERRUPT 1691
@@ -86,7 +87,7 @@ void bt_l2cap_init() {
 int bt_init() {
     queue_init(&send_fifo, sizeof(send_element), 20);
     queue_init(&priority_send_fifo, sizeof(send_element), 10);
-
+    state_init();
     bt_l2cap_init();
 
     gap_ssp_set_enable(true);
@@ -387,25 +388,13 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
                     printf("Init DualSense\n");
 
                     init_feature();
-                    uint8_t report32[142];
+                    uint8_t report32[142]{};
                     report32[0] = 0x32;
                     report32[1] = 0x10;
-                    uint8_t packet_0x10[] =
-                    {
-                        0x90,
-                        0x3f,
-                        0xfd, 0xf7, 0x0, 0x0,
-                        0x7f, 0x7f,
-                        0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-                        0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0xa,
-                        0x7, 0x0, 0x0, 0x2, 0x1,
-                        0x00,
-                        0xff, 0xd7, 0x00
-                    };
-                    memcpy(report32 + 2, packet_0x10, sizeof(packet_0x10));
-                    bt_write(report32, sizeof(report32));
+                    report32[2] = 0x10 | 0 << 6 | 1 << 7;
+                    report32[3] = 0x3f;
+                    state_set(report32 + 4, sizeof(SetStateData));
+                    bt_write(report32, sizeof(report32), false);
                 } else {
                     printf("[L2CAP] Unknown Channel psm: 0x%02X", psm);
                 }
