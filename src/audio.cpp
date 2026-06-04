@@ -15,6 +15,7 @@
 #include "pico/util/queue.h"
 #include "config.h"
 #include "usb.h"
+#include "state_mgr.h"
 
 #define INPUT_CHANNELS  4
 #define OUTPUT_CHANNELS 2
@@ -45,19 +46,6 @@ critical_section_t opus_cs;
 struct audio_raw_element {
     float data[512 * 2];
 };
-
-uint8_t state_data[63] = {
-    0xfd, 0xf7, 0x0, 0x0, 0x7f, 0x7f,
-    0xff, 0x9, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0,
-    0x0, 0xa, 0x7, 0x0, 0x0, 0x2, 0x1, 0x00, 0xff, 0xd7, 0x00,
-};
-
-void set_state_data(const uint8_t* data, const uint8_t len) {
-    memcpy(state_data, data, len);
-    if (state_data[0] & (1 << 1)) state_data[0] |= (1 << 0);
-}
 
 void set_headset(bool state) {
     plug_headset = state;
@@ -150,7 +138,7 @@ void audio_loop() {
         pkt[10] = packetCounter++;
         pkt[11] = 0x10 | 0 << 6 | 1 << 7;
         pkt[12] = 63;
-        memcpy(pkt + 13, state_data, sizeof(state_data));
+        state_set(pkt + 13, 63);
         pkt[76] = 0x12 | 0 << 6 | 1 << 7;
         pkt[77] = SAMPLE_SIZE;
         memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
