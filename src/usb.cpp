@@ -5,8 +5,6 @@
 #include "tusb.h"
 #include "bsp/board_api.h"
 #include "config.h"
-#include "audio.h"
-#include "bt.h"
 
 uint8_t mute[2]; // 0: SPEAKER(0x02) 1: MIC(0x05)
 float volume[2] = {-100.0f,0.0f}; // 0: SPEAKER(0x02) 1: MIC(0x05)
@@ -190,23 +188,4 @@ bool tud_audio_set_req_entity_cb(uint8_t rhport, tusb_control_request_t const *p
 void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_t len) {
     (void) instance;
     (void) len;
-}
-// HID output report from host — rumble, LED, trigger effects.
-// Report ID 0x05 = SetStateData (up to 63 bytes).
-// TinyUSB declares this as void — do NOT change the return type.
-void tud_hid_set_report_cb(uint8_t instance, uint8_t report_id,
-                            hid_report_type_t report_type,
-                            uint8_t const* buffer, uint16_t bufsize) {
-    (void) instance;
-    (void) report_type;
-
-    if (report_id == 0x05 && bufsize >= 47) {
-        set_state_data(buffer, (uint8_t)(bufsize < 63 ? bufsize : 63));
-        // Send immediately — do not wait for the next audio tick
-        uint8_t report[142] = {};
-        report[0] = 0x32;
-        report[1] = 0x10;
-        memcpy(report + 2, state_data, sizeof(state_data));
-        bt_write(report, sizeof(report), false);
-    }
 }
