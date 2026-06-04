@@ -1,11 +1,11 @@
 //
 // Simplified State Manager for DS5Dongle (Waveshare RP2350B-Plus-W Fork)
-// Bypasses the need for SetStateData struct by using direct byte mapping.
 //
 
 #include <cstddef>
 #include <cstring>
 #include <cstdio>
+#include <cstdint>  // <-- ADD THIS LINE TO FIX THE ERROR
 #include "state_mgr.h"
 
 static constexpr uint8_t state_init_data[63] = {
