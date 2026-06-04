@@ -6,7 +6,7 @@
 #define DS5_BRIDGE_AUDIO_H
 
 #include <cstdint>
-extern uint8_t state_data[63];
+
 void audio_init();
 void audio_loop();
 void core1_entry();
