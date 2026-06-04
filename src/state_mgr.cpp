@@ -1,12 +1,27 @@
 //
-// Simplified State Manager for DS5Dongle (Waveshare RP2350B-Plus-W Fork)
+// Created by awalol on 2026/5/15.
+// Adapted for older USBGetStateData forks.
 //
 
 #include <cstddef>
 #include <cstring>
 #include <cstdio>
-#include <cstdint>  // <-- ADD THIS LINE TO FIX THE ERROR
+#include <cstdint>
+
+#include "utils.h"
 #include "state_mgr.h"
+
+// This bridges Awalol's new file layout with your fork's exact structure definition
+using SetStateData = USBGetStateData;
+
+namespace {
+    constexpr size_t kAudioControlOffset = offsetof(SetStateData, MuteLightMode) - sizeof(uint8_t);
+    constexpr size_t kMuteControlOffset = offsetof(SetStateData, RightTriggerFFB) - sizeof(uint8_t);
+    constexpr size_t kMotorPowerLevelOffset = offsetof(SetStateData, HostTimestamp) + sizeof(uint32_t);
+    constexpr size_t kAudioControl2Offset = kMotorPowerLevelOffset + sizeof(uint8_t);
+    constexpr size_t kHapticLowPassFilterOffset = offsetof(SetStateData, LightFadeAnimation) - 2 * sizeof(uint8_t);
+    constexpr size_t kPlayerIndicatorsOffset = offsetof(SetStateData, LedRed) - sizeof(uint8_t);
+}
 
 static constexpr uint8_t state_init_data[63] = {
     0xfd, 0xf7, 0x0, 0x0,
@@ -34,64 +49,113 @@ void state_set(uint8_t *data, const uint8_t size) {
 }
 
 void state_update(const uint8_t *data, const uint8_t size) {
-    if (size < 48) {
+    if (size < sizeof(SetStateData)) {
+        printf(
+            "[StateMgr] Error: SetStateData at least %u bytes\n",
+            static_cast<unsigned>(sizeof(SetStateData))
+        );
         return;
     }
 
+    SetStateData update{};
+    memcpy(&update, data, sizeof(update));
+
+    const auto copy_if_allowed = [&](const bool allowed, const size_t offset, const size_t length) {
+        if (allowed) {
+            memcpy(state + offset, data + offset, length);
+        }
+    };
     auto set_bit = [](uint8_t &byte, const int bit, const bool value) {
         byte = (byte & ~(1 << bit)) | (value << bit);
     };
 
-    // Apply the rumble update flags to byte 0
-    bool enable_rumble = data[0] & 0x01;
-    bool use_rumble_not_haptics = data[0] & 0x02;
-    set_bit(state[0], 0, enable_rumble);
-    set_bit(state[0], 1, use_rumble_not_haptics);
-    
-    // Improved rumble emulation flag on byte 38
-    bool enable_improved_rumble = data[38] & 0x04;
-    set_bit(state[38], 2, enable_improved_rumble);
+    set_bit(state[0], 0, update.EnableRumbleEmulation);
+    set_bit(state[0], 1, update.UseRumbleNotHaptics);
+    set_bit(state[38], 2, update.EnableImprovedRumbleEmulation);
+    copy_if_allowed(
+        update.UseRumbleNotHaptics || update.EnableRumbleEmulation,
+        offsetof(SetStateData, RumbleEmulationRight),
+        2
+    );
 
-    // Rumble Emulation (Right & Left motor)
-    if (enable_rumble || use_rumble_not_haptics) {
-        state[3] = data[3];
-        state[4] = data[4];
-    }
+    /*copy_if_allowed(
+        update.AllowHeadphoneVolume,
+        offsetof(SetStateData, VolumeHeadphones),
+        sizeof(update.VolumeHeadphones)
+    );*/
+    /*copy_if_allowed(
+        update.AllowSpeakerVolume,
+        offsetof(SetStateData, VolumeSpeaker),
+        sizeof(update.VolumeSpeaker)
+    );*/
+    /*copy_if_allowed(
+        update.AllowMicVolume,
+        offsetof(SetStateData, VolumeMic),
+        sizeof(update.VolumeMic)
+    );*/
+    /*copy_if_allowed(
+        update.AllowAudioControl,
+        kAudioControlOffset,
+        sizeof(uint8_t)
+    );*/
 
-    // Mute Light Mode
-    if (data[1] & 0x01) { 
-        state[9] = data[9];
-    }
+    copy_if_allowed(
+        update.AllowMuteLight,
+        offsetof(SetStateData, MuteLightMode),
+        sizeof(update.MuteLightMode)
+    );
 
-    // Right Trigger FFB
-    if (data[1] & 0x04) { 
-        memcpy(state + 11, data + 11, 11);
-    }
+    /*copy_if_allowed(
+        update.AllowAudioMute,
+        kMuteControlOffset,
+        sizeof(uint8_t)
+    );*/
 
-    // Left Trigger FFB
-    if (data[1] & 0x08) { 
-        memcpy(state + 22, data + 22, 11);
-    }
+    copy_if_allowed(
+        update.AllowRightTriggerFFB,
+        offsetof(SetStateData, RightTriggerFFB),
+        sizeof(update.RightTriggerFFB)
+    );
+    copy_if_allowed(
+        update.AllowLeftTriggerFFB,
+        offsetof(SetStateData, LeftTriggerFFB),
+        sizeof(update.LeftTriggerFFB)
+    );
 
-    // Light Fade Animation
-    if (data[2] & 0x01) { 
-        state[42] = data[42];
-    }
+    /*copy_if_allowed(
+        update.AllowMotorPowerLevel,
+        kMotorPowerLevelOffset,
+        sizeof(uint8_t)
+    );*/
+    /*copy_if_allowed(
+        update.AllowAudioControl2,
+        kAudioControl2Offset,
+        sizeof(uint8_t)
+    );*/
+    /*copy_if_allowed(
+        update.AllowHapticLowPassFilter,
+        kHapticLowPassFilterOffset,
+        sizeof(uint8_t)
+    );*/
 
-    // Light Brightness
-    if (data[2] & 0x02) { 
-        state[43] = data[43];
-    }
-
-    // Player Indicators
-    if (data[2] & 0x04) { 
-        state[44] = data[44];
-    }
-
-    // RGB LED
-    if (data[2] & 0x08) { 
-        state[45] = data[45]; // Red
-        state[46] = data[46]; // Green
-        state[47] = data[47]; // Blue
-    }
+    copy_if_allowed(
+        update.AllowColorLightFadeAnimation,
+        offsetof(SetStateData, LightFadeAnimation),
+        sizeof(update.LightFadeAnimation)
+    );
+    copy_if_allowed(
+        update.AllowLightBrightnessChange,
+        offsetof(SetStateData, LightBrightness),
+        sizeof(update.LightBrightness)
+    );
+    copy_if_allowed(
+        update.AllowPlayerIndicators,
+        kPlayerIndicatorsOffset,
+        sizeof(uint8_t)
+    );
+    copy_if_allowed(
+        update.AllowLedColor,
+        offsetof(SetStateData, LedRed),
+        sizeof(update.LedRed) * 3
+    );
 }
