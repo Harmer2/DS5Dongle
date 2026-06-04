@@ -230,3 +230,27 @@ void state_update(const uint8_t *data, const uint8_t size) {
         sizeof(update.LedRed) * 3
     );
 }
+void state_update_from_game(const uint8_t *data, uint16_t size) {
+    if (size < 48) return;
+
+    // 1. Sync USB activation flags directly to their proper Bluetooth cache registers
+    state[0] = data[0];  // valid_flag0 (Rumble)
+    state[1] = data[1];  // valid_flag1 (Adaptive Triggers)
+    state[38] = data[2]; // valid_flag2 (Lightbar/LEDs) -> Shifted to byte 38 on Bluetooth
+
+    // 2. Sync Rumble Motors
+    state[3] = data[3];  // Right Motor strength
+    state[4] = data[4];  // Left Motor strength
+
+    // 3. Sync Adaptive Triggers
+    std::memcpy(state + 11, data + 11, 11); // Right Trigger configuration
+    std::memcpy(state + 22, data + 22, 11); // Left Trigger configuration
+
+    // 4. Sync Lightbar & LED Profiles
+    state[42] = data[42]; // Light Fade Animation
+    state[43] = data[43]; // Light Brightness
+    state[44] = data[44]; // Player Indicators
+    state[45] = data[45]; // LED Red
+    state[46] = data[46]; // LED Green
+    state[47] = data[47]; // LED Blue
+}
