@@ -56,6 +56,7 @@ uint8_t state_data[63] = {
 
 void set_state_data(const uint8_t* data, const uint8_t len) {
     memcpy(state_data, data, len);
+    if (state_data[0] & (1 << 1)) state_data[0] |= (1 << 0);
 }
 
 void set_headset(bool state) {
