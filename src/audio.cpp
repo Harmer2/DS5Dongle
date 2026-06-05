@@ -156,10 +156,17 @@ void audio_loop() {
             // Opus frame. Skipping stale frames stops the repeated-packet
             // artifact (audio "stuttering loop") heard during mic use.
             critical_section_enter_blocking(&opus_cs);
-            if (!opus_buf_valid) {
+            if (opus_buf_valid) {
+                memcpy(pkt + 144, opus_buf, 200);
                 critical_section_exit(&opus_cs);
-                haptic_buf_pos = 0;
-                continue;
+            } else {
+                critical_section_exit(&opus_cs);
+                // Send silence — keep BT pipeline alive even if Opus stalled
+                memset(pkt + 144, 0, 200);
+}
+
+            bt_write(pkt, sizeof(pkt), true);
+             haptic_buf_pos = 0;
             }
             memcpy(pkt + 144, opus_buf, 200);
             critical_section_exit(&opus_cs);
