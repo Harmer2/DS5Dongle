@@ -189,27 +189,3 @@ void tud_hid_report_complete_cb(uint8_t instance, uint8_t const *report, uint16_
     (void) instance;
     (void) len;
 }
-// Invoked when host changes the audio streaming interface alternate setting.
-// alt=0 means the interface is going IDLE (no streaming).
-// alt=1 means the interface is going ACTIVE (streaming started).
-// On deactivation, flush the FIFO so stale isochronous data doesn't
-// poison the feedback endpoint and cause Windows to stop sending audio.
-bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
-    (void) rhport;
-    uint8_t const itf = tu_u16_low(p_request->wIndex);
-    uint8_t const alt = tu_u16_low(p_request->wValue);
-
-    printf("[AUDIO] itf=%u alt=%u\n", itf, alt);
-
-    if (alt == 0) {
-        if (itf == 1) {
-            // Speaker OUT going idle — flush the output FIFO
-            tud_audio_clear_ep_out_ff();
-        } else if (itf == 2) {
-            // Mic IN going idle — flush the input FIFO
-            tud_audio_n_clear_ep_in_ff(0);
-        }
-    }
-
-    return true;
-}
