@@ -1,14 +1,13 @@
-$ cat << 'ENDOFFILE' > /tmp/audio.cpp
 // Created by awalol on 2026/3/5.
 // v2-opt — fifo depth 2->4, cached audio_gain, Waveshare RP2350B-Plus-W
 // v5     — audio packets routed to priority_send_fifo via bt_write(..., true)
-// v6     — drain-loop fix: read all available USB frames per audio_loop() call
-//           opus_buf_valid guard: skip BT send if Core 1 has no frame ready yet
+// v6     — opus_buf_valid guard (port from sundaymoments), drain loop, SW buf fix
 
 #include "audio.h"
 #include "bt.h"
 #include "resample.h"
 #include "tusb.h"
+#include <cstddef>
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -44,7 +43,9 @@ static bool    plug_headset     = false;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 static uint8_t opus_buf[200];
-static bool    opus_buf_valid = false;   // true once Core 1 has written the first frame
+// PORT from sundaymoments: valid flag prevents stale Opus frames being sent
+// when Core 1 hasn't encoded a new frame yet (e.g. fifo stall on startup).
+static bool    opus_buf_valid = false;
 critical_section_t opus_cs;
 
 struct audio_raw_element {
@@ -58,7 +59,7 @@ void set_headset(bool state) {
 // Cached audio gain — powf(10, x/20) is expensive.
 // Cache it and only recompute when volume changes.
 static float cached_audio_gain     = 0.0f;
-static float cached_speaker_volume = -999.0f; // sentinel: force first compute
+static float cached_speaker_volume = -999.0f;
 
 static float get_audio_gain() {
     const float vol = get_config().speaker_volume;
@@ -70,8 +71,10 @@ static float get_audio_gain() {
 }
 
 void audio_loop() {
-    // Drain ALL available USB audio frames per call — prevents SW buffer
-    // backup when cyw43_arch_poll() delays the main loop beyond 1 ms.
+    // PORT from sundaymoments: drain ALL available USB frames per call.
+    // Prevents SW buffer backup when cyw43_arch_poll() delays main loop > 1ms.
+    // Original read only one frame (192 samples) per call — caused fade-out
+    // under mic + BT load because frames queued faster than they were drained.
     while (tud_audio_available()) {
         int16_t raw[192];
         uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
@@ -124,16 +127,6 @@ void audio_loop() {
 
             if (haptic_buf_pos != SAMPLE_SIZE) continue;
 
-            // Don't send a BT audio packet until Core 1 has encoded at least
-            // one Opus frame — avoids sending zeroed opus_buf on startup.
-            critical_section_enter_blocking(&opus_cs);
-            if (!opus_buf_valid) {
-                critical_section_exit(&opus_cs);
-                haptic_buf_pos = 0;
-                continue;
-            }
-            critical_section_exit(&opus_cs);
-
             uint8_t pkt[REPORT_SIZE]{};
             pkt[0] = REPORT_ID;
             pkt[1] = reportSeqCounter << 4;
@@ -159,7 +152,15 @@ void audio_loop() {
             pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
             pkt[143] = 200;
 
+            // PORT from sundaymoments: only send if Core 1 has produced a valid
+            // Opus frame. Skipping stale frames stops the repeated-packet
+            // artifact (audio "stuttering loop") heard during mic use.
             critical_section_enter_blocking(&opus_cs);
+            if (!opus_buf_valid) {
+                critical_section_exit(&opus_cs);
+                haptic_buf_pos = 0;
+                continue;
+            }
             memcpy(pkt + 144, opus_buf, 200);
             critical_section_exit(&opus_cs);
 
@@ -224,9 +225,11 @@ void core1_entry() {
         static uint8_t out[200];
         (void) opus_encode_float(encoder, out_buf, 480, out, 200);
 
+        // PORT from sundaymoments: mark buffer valid after first successful encode.
+        // Core 0 audio_loop() will not send speaker packets until this is set.
         critical_section_enter_blocking(&opus_cs);
         memcpy(opus_buf, out, 200);
-        opus_buf_valid = true;   // signal Core 0 that a real frame is ready
+        opus_buf_valid = true;
         critical_section_exit(&opus_cs);
     }
 }
