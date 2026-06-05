@@ -76,7 +76,11 @@ void state_update(const uint8_t *data, const uint8_t size) {
         offsetof(SetStateData, RumbleEmulationRight),
         2
     );
-
+    // Force both rumble emulation bits ON whenever ANY rumble value is non-zero
+    if (update.RumbleEmulationRight > 0 || update.RumbleEmulationLeft > 0) {
+    state[0] |= 0x03; // EnableRumbleEmulation + UseRumbleNotHaptics
+    state[38] |= 0x04;
+    }
     copy_if_allowed(
         update.AllowMuteLight,
         offsetof(SetStateData, MuteLightMode),
