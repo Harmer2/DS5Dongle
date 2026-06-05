@@ -1,13 +1,22 @@
 //
-// Official Sony Specification State Manager for DS5Dongle
-// Maps USB payload layouts cleanly to Bluetooth cache layouts.
+// Created by awalol on 2026/5/15.
+// Adapted for Waveshare RP2350B-Plus-W build
 //
 
+#include <cstddef>
 #include <cstring>
-#include <cstdint>
 #include <cstdio>
-#include "state_mgr.h"
 #include "utils.h"
+#include "state_mgr.h"
+
+namespace {
+    constexpr size_t kAudioControlOffset = offsetof(SetStateData, MuteLightMode) - sizeof(uint8_t);
+    constexpr size_t kMuteControlOffset = offsetof(SetStateData, RightTriggerFFB) - sizeof(uint8_t);
+    constexpr size_t kMotorPowerLevelOffset = offsetof(SetStateData, HostTimestamp) + sizeof(uint32_t);
+    constexpr size_t kAudioControl2Offset = kMotorPowerLevelOffset + sizeof(uint8_t);
+    constexpr size_t kHapticLowPassFilterOffset = offsetof(SetStateData, LightFadeAnimation) - 2 * sizeof(uint8_t);
+    constexpr size_t kPlayerIndicatorsOffset = offsetof(SetStateData, LedRed) - sizeof(uint8_t);
+}
 
 static constexpr uint8_t state_init_data[63] = {
     0xfd, 0xf7, 0x0, 0x0,
@@ -24,59 +33,87 @@ static constexpr uint8_t state_init_data[63] = {
 uint8_t state[63]{};
 
 void state_init() {
-    std::memcpy(state, state_init_data, sizeof(state));
+    memcpy(state, state_init_data, sizeof(state));
 }
 
 void state_set(uint8_t *data, const uint8_t size) {
-    std::memcpy(data, state, size > 63 ? 63 : size);
+    if (size > 63) {
+        printf("[StateMgr] Warning: State Set over 63 bytes\n");
+    }
+    memcpy(data, state, size);
 }
 
 void state_update(const uint8_t *data, const uint8_t size) {
-    if (size < sizeof(SetStateData)) return;
+    if (size < sizeof(SetStateData)) {
+        printf(
+            "[StateMgr] Error: SetStateData at least %u bytes\n",
+            static_cast<unsigned>(sizeof(SetStateData))
+        );
+        return;
+    }
 
     SetStateData update{};
-    std::memcpy(&update, data, sizeof(update));
+    memcpy(&update, data, sizeof(update));
 
+    const auto copy_if_allowed = [&](const bool allowed, const size_t offset, const size_t length) {
+        if (allowed) {
+            memcpy(state + offset, data + offset, length);
+        }
+    };
     auto set_bit = [](uint8_t &byte, const int bit, const bool value) {
         byte = (byte & ~(1 << bit)) | (value << bit);
     };
-    const auto copy_if = [&](bool allowed, size_t offset, size_t length) {
-        if (allowed) std::memcpy(state + offset, data + offset, length);
-    };
 
-    // Rumble emulation flag bits — merge with |= never overwrite
     set_bit(state[0], 0, update.EnableRumbleEmulation);
     set_bit(state[0], 1, update.UseRumbleNotHaptics);
+    // WAVESHARE FIX: use |= not set_bit here — EnableImprovedRumbleEmulation must
+    // never be cleared by a subsequent LED-only or mute-light-only packet,
+    // or the DualSense DSP drops back to haptics mode and audio fades out.
     if (update.EnableImprovedRumbleEmulation) state[38] |= 0x04;
 
-    // Rumble motor values
-    copy_if(update.UseRumbleNotHaptics || update.EnableRumbleEmulation,
-            offsetof(SetStateData, RumbleEmulationRight), 2);
+    copy_if_allowed(
+        update.UseRumbleNotHaptics || update.EnableRumbleEmulation,
+        offsetof(SetStateData, RumbleEmulationRight),
+        2
+    );
 
-    // Mute light
-    copy_if(update.AllowMuteLight,
-            offsetof(SetStateData, MuteLightMode), sizeof(update.MuteLightMode));
+    copy_if_allowed(
+        update.AllowMuteLight,
+        offsetof(SetStateData, MuteLightMode),
+        sizeof(update.MuteLightMode)
+    );
 
-    // Adaptive trigger FFB
-    copy_if(update.AllowRightTriggerFFB,
-            offsetof(SetStateData, RightTriggerFFB), sizeof(update.RightTriggerFFB));
-    copy_if(update.AllowLeftTriggerFFB,
-            offsetof(SetStateData, LeftTriggerFFB), sizeof(update.LeftTriggerFFB));
+    copy_if_allowed(
+        update.AllowRightTriggerFFB,
+        offsetof(SetStateData, RightTriggerFFB),
+        sizeof(update.RightTriggerFFB)
+    );
+    copy_if_allowed(
+        update.AllowLeftTriggerFFB,
+        offsetof(SetStateData, LeftTriggerFFB),
+        sizeof(update.LeftTriggerFFB)
+    );
 
-    // LED fade animation + brightness
-    copy_if(update.AllowColorLightFadeAnimation,
-            offsetof(SetStateData, LightFadeAnimation), sizeof(update.LightFadeAnimation));
-    copy_if(update.AllowLightBrightnessChange,
-            offsetof(SetStateData, LightBrightness), sizeof(update.LightBrightness));
-
-    // Player indicator LEDs (byte immediately before LedRed)
-    copy_if(update.AllowPlayerIndicators,
-            offsetof(SetStateData, LedRed) - 1, sizeof(uint8_t));
-
-    // RGB LED color — only written when AllowLedColor is set,
-    // so rumble-only packets can never wipe the color
-    copy_if(update.AllowLedColor,
-            offsetof(SetStateData, LedRed), 3);
+    copy_if_allowed(
+        update.AllowColorLightFadeAnimation,
+        offsetof(SetStateData, LightFadeAnimation),
+        sizeof(update.LightFadeAnimation)
+    );
+    copy_if_allowed(
+        update.AllowLightBrightnessChange,
+        offsetof(SetStateData, LightBrightness),
+        sizeof(update.LightBrightness)
+    );
+    copy_if_allowed(
+        update.AllowPlayerIndicators,
+        kPlayerIndicatorsOffset,
+        sizeof(uint8_t)
+    );
+    copy_if_allowed(
+        update.AllowLedColor,
+        offsetof(SetStateData, LedRed),
+        sizeof(update.LedRed) * 3
+    );
 }
 
 // Keep signature alive for header compilation safety
