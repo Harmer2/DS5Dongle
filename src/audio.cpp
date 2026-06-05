@@ -1,6 +1,9 @@
+$ cat << 'ENDOFFILE' > /tmp/audio.cpp
 // Created by awalol on 2026/3/5.
 // v2-opt — fifo depth 2->4, cached audio_gain, Waveshare RP2350B-Plus-W
 // v5     — audio packets routed to priority_send_fifo via bt_write(..., true)
+// v6     — drain-loop fix: read all available USB frames per audio_loop() call
+//           opus_buf_valid guard: skip BT send if Core 1 has no frame ready yet
 
 #include "audio.h"
 #include "bt.h"
@@ -41,6 +44,7 @@ static bool    plug_headset     = false;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 static uint8_t opus_buf[200];
+static bool    opus_buf_valid = false;   // true once Core 1 has written the first frame
 critical_section_t opus_cs;
 
 struct audio_raw_element {
@@ -53,7 +57,6 @@ void set_headset(bool state) {
 
 // Cached audio gain — powf(10, x/20) is expensive.
 // Cache it and only recompute when volume changes.
-// Removes a powf() call from every audio_loop() tick on Core 0.
 static float cached_audio_gain     = 0.0f;
 static float cached_speaker_volume = -999.0f; // sentinel: force first compute
 
@@ -67,92 +70,104 @@ static float get_audio_gain() {
 }
 
 void audio_loop() {
-    if (!tud_audio_available()) return;
+    // Drain ALL available USB audio frames per call — prevents SW buffer
+    // backup when cyw43_arch_poll() delays the main loop beyond 1 ms.
+    while (tud_audio_available()) {
+        int16_t raw[192];
+        uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
+        int frames = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
+        if (frames == 0) break;
 
-    int16_t  raw[192];
-    uint32_t bytes_read = tud_audio_read(raw, sizeof(raw));
-    int      frames     = bytes_read / (INPUT_CHANNELS * sizeof(int16_t));
-    if (frames == 0) return;
+        static float audio_buf[512 * 2];
+        static uint  audio_buf_pos = 0;
 
-    static float audio_buf[512 * 2];
-    static uint  audio_buf_pos = 0;
+        WDL_ResampleSample *in_buf;
+        int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
 
-    WDL_ResampleSample *in_buf;
-    int nframes = resampler.ResamplePrepare(frames, OUTPUT_CHANNELS, &in_buf);
+        const float audio_gain   = get_audio_gain();
+        const float haptics_gain = get_config().haptics_gain;
 
-    const float audio_gain   = get_audio_gain();
-    const float haptics_gain = get_config().haptics_gain;
+        for (int i = 0; i < nframes; i++) {
+            audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS]     / 32768.0f * audio_gain;
+            audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * audio_gain;
 
-    for (int i = 0; i < nframes; i++) {
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS]     / 32768.0f * audio_gain;
-        audio_buf[audio_buf_pos++] = raw[i * INPUT_CHANNELS + 1] / 32768.0f * audio_gain;
-
-        if (audio_buf_pos == 512 * 2) {
-            static audio_raw_element element{};
-            memcpy(element.data, audio_buf, 512 * 2 * 4);
-            // Drop oldest frame if full rather than silently losing newest data
-            if (queue_is_full(&audio_fifo)) {
-                queue_try_remove(&audio_fifo, NULL);
+            if (audio_buf_pos == 512 * 2) {
+                static audio_raw_element element{};
+                memcpy(element.data, audio_buf, 512 * 2 * 4);
+                // Drop oldest frame if full rather than silently losing newest data
+                if (queue_is_full(&audio_fifo)) {
+                    queue_try_remove(&audio_fifo, NULL);
+                }
+                if (!queue_try_add(&audio_fifo, &element)) {
+                    printf("[Audio] Warning: audio_fifo add failed\n");
+                }
+                audio_buf_pos = 0;
             }
-            if (!queue_try_add(&audio_fifo, &element)) {
-                printf("[Audio] Warning: audio_fifo add failed\n");
-            }
-            audio_buf_pos = 0;
+
+            in_buf[i * 2]     = static_cast<WDL_ResampleSample>(clamp(
+                raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain, -1.0f, 1.0f));
+            in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(
+                raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain, -1.0f, 1.0f));
         }
 
-        in_buf[i * 2]     = static_cast<WDL_ResampleSample>(clamp(
-            raw[i * INPUT_CHANNELS + 2] / 32768.0f * haptics_gain, -1.0f, 1.0f));
-        in_buf[i * 2 + 1] = static_cast<WDL_ResampleSample>(clamp(
-            raw[i * INPUT_CHANNELS + 3] / 32768.0f * haptics_gain, -1.0f, 1.0f));
-    }
+        static WDL_ResampleSample out_buf[SAMPLE_SIZE];
+        const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
 
-    static WDL_ResampleSample out_buf[SAMPLE_SIZE];
-    const int out_frames = resampler.ResampleOut(out_buf, nframes, nframes / 4, OUTPUT_CHANNELS);
+        static int8_t haptic_buf[SAMPLE_SIZE];
+        static int    haptic_buf_pos = 0;
 
-    static int8_t haptic_buf[SAMPLE_SIZE];
-    static int    haptic_buf_pos = 0;
+        for (int i = 0; i < out_frames; i++) {
+            int val_l = static_cast<int>(out_buf[i * 2]     * 127.0f);
+            int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
+            haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127);
+            haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
 
-    for (int i = 0; i < out_frames; i++) {
-        int val_l = static_cast<int>(out_buf[i * 2]     * 127.0f);
-        int val_r = static_cast<int>(out_buf[i * 2 + 1] * 127.0f);
-        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_l, -128, 127);
-        haptic_buf[haptic_buf_pos++] = (int8_t) clamp(val_r, -128, 127);
+            if (haptic_buf_pos != SAMPLE_SIZE) continue;
 
-        if (haptic_buf_pos != SAMPLE_SIZE) continue;
+            // Don't send a BT audio packet until Core 1 has encoded at least
+            // one Opus frame — avoids sending zeroed opus_buf on startup.
+            critical_section_enter_blocking(&opus_cs);
+            if (!opus_buf_valid) {
+                critical_section_exit(&opus_cs);
+                haptic_buf_pos = 0;
+                continue;
+            }
+            critical_section_exit(&opus_cs);
 
-        uint8_t pkt[REPORT_SIZE]{};
-        pkt[0] = REPORT_ID;
-        pkt[1] = reportSeqCounter << 4;
-        reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
-        pkt[2] = 0x11 | 0 << 6 | 1 << 7;
-        pkt[3] = 7;
-        pkt[4] = 0b11111110;
+            uint8_t pkt[REPORT_SIZE]{};
+            pkt[0] = REPORT_ID;
+            pkt[1] = reportSeqCounter << 4;
+            reportSeqCounter = (reportSeqCounter + 1) & 0x0F;
+            pkt[2] = 0x11 | 0 << 6 | 1 << 7;
+            pkt[3] = 7;
+            pkt[4] = 0b11111110;
 
-        const auto buf_len = get_config().audio_buffer_length;
-        pkt[5] = buf_len;
-        pkt[6] = buf_len;
-        pkt[7] = buf_len;
-        pkt[8] = buf_len;
-        pkt[9] = buf_len;
+            const auto buf_len = get_config().audio_buffer_length;
+            pkt[5] = buf_len;
+            pkt[6] = buf_len;
+            pkt[7] = buf_len;
+            pkt[8] = buf_len;
+            pkt[9] = buf_len;
 
-        pkt[10] = packetCounter++;
-        pkt[11] = 0x10 | 0 << 6 | 1 << 7;
-        pkt[12] = 63;
-        state_set(pkt + 13, 63);
-        pkt[76] = 0x12 | 0 << 6 | 1 << 7;
-        pkt[77] = SAMPLE_SIZE;
-        memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
-        pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
-        pkt[143] = 200;
+            pkt[10] = packetCounter++;
+            pkt[11] = 0x10 | 0 << 6 | 1 << 7;
+            pkt[12] = 63;
+            state_set(pkt + 13, 63);
+            pkt[76] = 0x12 | 0 << 6 | 1 << 7;
+            pkt[77] = SAMPLE_SIZE;
+            memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
+            pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
+            pkt[143] = 200;
 
-        critical_section_enter_blocking(&opus_cs);
-        memcpy(pkt + 144, opus_buf, 200);
-        critical_section_exit(&opus_cs);
+            critical_section_enter_blocking(&opus_cs);
+            memcpy(pkt + 144, opus_buf, 200);
+            critical_section_exit(&opus_cs);
 
-        // Priority flag = true — audio packets go to priority_send_fifo,
-        // ahead of HID output reports in send_fifo. This is the stutter fix.
-        bt_write(pkt, sizeof(pkt), true);
-        haptic_buf_pos = 0;
+            // Priority flag = true — audio packets go to priority_send_fifo,
+            // ahead of HID output reports in send_fifo.
+            bt_write(pkt, sizeof(pkt), true);
+            haptic_buf_pos = 0;
+        }
     }
 }
 
@@ -211,6 +226,7 @@ void core1_entry() {
 
         critical_section_enter_blocking(&opus_cs);
         memcpy(opus_buf, out, 200);
+        opus_buf_valid = true;   // signal Core 0 that a real frame is ready
         critical_section_exit(&opus_cs);
     }
 }
