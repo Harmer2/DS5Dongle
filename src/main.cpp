@@ -122,16 +122,6 @@ uint16_t tud_hid_get_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t
     return feature_data.empty() ? 0 : feature_data.size() - 1;
 }
 
-bool tud_audio_set_itf_cb(uint8_t rhport, tusb_control_request_t const *p_request) {
-    (void) rhport;
-    uint8_t const itf = tu_u16_low(p_request->wIndex);
-    uint8_t const alt = tu_u16_low(p_request->wValue);
-    if (itf == 1) {
-        printf("[AUDIO] Set interface Speaker to alternate setting %d\n", alt);
-    }
-    return true;
-}
-
 void tud_hid_set_report_cb(uint8_t itf, uint8_t report_id, hid_report_type_t report_type, uint8_t const *buffer,
                            uint16_t bufsize) {
     (void) itf;
