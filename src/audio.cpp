@@ -167,7 +167,8 @@ void audio_loop() {
 
         bt_write(pkt, sizeof(pkt), true);
         haptic_buf_pos = 0;
-
+            
+          } // closes: if (haptic_buf_pos == SAMPLE_SIZE) — the for loop body
     } // closes: while (tud_audio_available())
 } // closes: audio_loop()
 
