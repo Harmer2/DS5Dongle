@@ -43,9 +43,9 @@ static bool    plug_headset     = false;
 alignas(8) static uint32_t audio_core1_stack[8192];
 queue_t audio_fifo;
 static uint8_t opus_buf[200];
-// PORT from sundaymoments: valid flag prevents stale Opus frames being sent
-// when Core 1 hasn't encoded a new frame yet (e.g. fifo stall on startup).
 static bool    opus_buf_valid = false;
+static uint32_t opus_buf_generation = 0;
+static uint32_t audio_stream_generation = 1;
 critical_section_t opus_cs;
 
 struct audio_raw_element {
@@ -151,22 +151,18 @@ void audio_loop() {
             memcpy(pkt + 78, haptic_buf, SAMPLE_SIZE);
             pkt[142] = (plug_headset ? 0x16 : 0x13) | 0 << 6 | 1 << 7;
             pkt[143] = 200;
-
-            // PORT from sundaymoments: only send if Core 1 has produced a valid
-            // Opus frame. Skipping stale frames stops the repeated-packet
-            // artifact (audio "stuttering loop") heard during mic use.
-        critical_section_enter_blocking(&opus_cs);
-        if (opus_buf_valid) {
+            critical_section_enter_blocking(&opus_cs);
+            const bool have_opus = opus_buf_valid && (opus_buf_generation == audio_stream_generation);
+        if (have_opus) {
             memcpy(pkt + 144, opus_buf, 200);
+}
             critical_section_exit(&opus_cs);
-        } else {
-            critical_section_exit(&opus_cs);
-            // Send silence — keep BT pipeline alive even if Opus stalled
-            memset(pkt + 144, 0, 200);
-        }
-
-        bt_write(pkt, sizeof(pkt), true);
-        haptic_buf_pos = 0;
+        if (!have_opus) {
+            haptic_buf_pos = 0;
+      continue;
+}
+bt_write(pkt, sizeof(pkt), true);
+haptic_buf_pos = 0;
             
           } // closes: if (haptic_buf_pos == SAMPLE_SIZE) — the for loop body
     } // closes: while (tud_audio_available())
@@ -181,7 +177,7 @@ void audio_init() {
     // Depth 2->4 — gives Core 1 (Opus encoder) more headroom before
     // frames are dropped. At 360 MHz Core 1 encodes ~10ms frames; depth 4
     // covers ~40ms of burst without dropping.
-    queue_init(&audio_fifo, sizeof(audio_raw_element), 4);
+    queue_init(&audio_fifo, sizeof(audio_raw_element), 2);
 
     critical_section_init(&opus_cs);
     multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
@@ -201,7 +197,7 @@ void core1_entry() {
     opus_encoder_ctl(encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
     opus_encoder_ctl(encoder, OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder, OPUS_SET_VBR(false));
-    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
+    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(0));
 
     resampler_audio.SetMode(true, 0, false);
     resampler_audio.SetRates(51200, 48000);
@@ -223,13 +219,14 @@ void core1_entry() {
         resampler_audio.ResampleOut(out_buf, nframes, 480, 2);
 
         static uint8_t out[200];
-        (void) opus_encode_float(encoder, out_buf, 480, out, 200);
-
-        // PORT from sundaymoments: mark buffer valid after first successful encode.
-        // Core 0 audio_loop() will not send speaker packets until this is set.
-        critical_section_enter_blocking(&opus_cs);
-        memcpy(opus_buf, out, 200);
-        opus_buf_valid = true;
-        critical_section_exit(&opus_cs);
+const opus_int32 encoded_bytes = opus_encode_float(encoder, out_buf, 480, out, 200);
+if (encoded_bytes > 0) {
+    const uint32_t gen = audio_stream_generation;
+    critical_section_enter_blocking(&opus_cs);
+    memcpy(opus_buf, out, 200);
+    opus_buf_generation = gen;
+    opus_buf_valid = true;
+    critical_section_exit(&opus_cs);
+}
     }
 }
