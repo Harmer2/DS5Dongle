@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <cstdio>
 #include "state_mgr.h"
+#include "utils.h"
 
 static constexpr uint8_t state_init_data[63] = {
     0xfd, 0xf7, 0x0, 0x0,
@@ -31,25 +32,51 @@ void state_set(uint8_t *data, const uint8_t size) {
 }
 
 void state_update(const uint8_t *data, const uint8_t size) {
-    if (size < 48) return;
+    if (size < sizeof(SetStateData)) return;
 
-    // 1. Copy the raw USB payload into our Bluetooth cache buffer
-    uint8_t copy_size = size > 63 ? 63 : size;
-    std::memcpy(state, data, copy_size);
+    SetStateData update{};
+    std::memcpy(&update, data, sizeof(update));
 
-    // 2. FIX THE FLAG MAPPING MISMATCH:
-    // On USB, valid_flag2 is at byte 2. On Bluetooth, it MUST live at byte 38.
-    uint8_t usb_valid_flag2 = data[2];
-    state[38] = usb_valid_flag2; 
-    state[2] = 0; // Clear byte 2 since it's reserved padding on Bluetooth
+    auto set_bit = [](uint8_t &byte, const int bit, const bool value) {
+        byte = (byte & ~(1 << bit)) | (value << bit);
+    };
+    const auto copy_if = [&](bool allowed, size_t offset, size_t length) {
+        if (allowed) std::memcpy(state + offset, data + offset, length);
+    };
 
-    // 3. FORCE RUMBLE EMULATION COMPATIBILITY:
-    // When the audio loop sends 0x36 haptic packets, standard rumble is ignored 
-    // unless the DualSense's internal Rumble Emulation DSP is explicitly turned ON.
-    if (data[0] & 0x01) { 
-        state[0] |= 0x03;   // Force EnableRumbleEmulation & UseRumbleNotHaptics bits ON
-        state[38] |= 0x04;  // Force EnableImprovedRumbleEmulation bit ON
-    }
+    // Rumble emulation flag bits — merge with |= never overwrite
+    set_bit(state[0], 0, update.EnableRumbleEmulation);
+    set_bit(state[0], 1, update.UseRumbleNotHaptics);
+    if (update.EnableImprovedRumbleEmulation) state[38] |= 0x04;
+
+    // Rumble motor values
+    copy_if(update.UseRumbleNotHaptics || update.EnableRumbleEmulation,
+            offsetof(SetStateData, RumbleEmulationRight), 2);
+
+    // Mute light
+    copy_if(update.AllowMuteLight,
+            offsetof(SetStateData, MuteLightMode), sizeof(update.MuteLightMode));
+
+    // Adaptive trigger FFB
+    copy_if(update.AllowRightTriggerFFB,
+            offsetof(SetStateData, RightTriggerFFB), sizeof(update.RightTriggerFFB));
+    copy_if(update.AllowLeftTriggerFFB,
+            offsetof(SetStateData, LeftTriggerFFB), sizeof(update.LeftTriggerFFB));
+
+    // LED fade animation + brightness
+    copy_if(update.AllowColorLightFadeAnimation,
+            offsetof(SetStateData, LightFadeAnimation), sizeof(update.LightFadeAnimation));
+    copy_if(update.AllowLightBrightnessChange,
+            offsetof(SetStateData, LightBrightness), sizeof(update.LightBrightness));
+
+    // Player indicator LEDs (byte immediately before LedRed)
+    copy_if(update.AllowPlayerIndicators,
+            offsetof(SetStateData, LedRed) - 1, sizeof(uint8_t));
+
+    // RGB LED color — only written when AllowLedColor is set,
+    // so rumble-only packets can never wipe the color
+    copy_if(update.AllowLedColor,
+            offsetof(SetStateData, LedRed), 3);
 }
 
 // Keep signature alive for header compilation safety
