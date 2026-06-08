@@ -42,10 +42,11 @@ else ()
 endif ()
 
 # Opus encoder complexity (0=lowest CPU, 10=highest quality).
-# At 360 MHz Core 1 handles complexity 4 comfortably.
+# At 320 MHz Core 1 handles complexity 0 comfortably.
 # Reduce to 2 if you observe audio dropouts on your specific unit.
-set(OPUS_COMPLEXITY 4 CACHE STRING "Opus encoder complexity (0-10)")
 
+set(SYS_CLOCK_KHZ_VALUE 320000)
+set(OPUS_COMPLEXITY 0 CACHE STRING "Opus encoder complexity (0-10)")
 include(pico_sdk_import.cmake)
 
 project(ds5-bridge C CXX ASM)
@@ -108,7 +109,12 @@ set(OPUS_BUILD_PROGRAMS OFF CACHE BOOL "" FORCE)
 set(OPUS_BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
 add_subdirectory(lib/opus)
-
+if(${SYS_CLOCK_KHZ_VALUE} GREATER 266000)
+    set(PICO_FLASH_SPI_CLKDIV 4)
+else()
+    set(PICO_FLASH_SPI_CLKDIV 2)
+endif()
+target_compile_definitions(bs2_default PRIVATE PICO_FLASH_SPI_CLKDIV=${PICO_FLASH_SPI_CLKDIV})
 target_compile_options(wdl_resampler PRIVATE -fsigned-char)
 target_compile_options(ds5-bridge PRIVATE -fsigned-char)
 
@@ -124,7 +130,7 @@ target_compile_definitions(ds5-bridge PRIVATE
         PICO_FLASH_ASSUME_CORE1_SAFE=1
         WDL_RESAMPLE_TYPE=float
         # CYW43439 SPI clock = sys_clock / CYW43_PIO_CLOCK_DIV_INT
-        # At 360 MHz sys_clock, divider 5 = 72 MHz.
+        # At 320 MHz sys_clock, divider 5 = 64 MHz.
         # This exceeds the datasheet spec of ~50 MHz but works reliably
         # on this specific hardware (Waveshare RP2350B Plus W).
         # Divider 8 (45 MHz, within spec) breaks BT connectivity on this board.
@@ -136,6 +142,8 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
         ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
         OPUS_COMPLEXITY=${OPUS_COMPLEXITY}
+        PICO_EMBED_XIP_SETUP=1
+        SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
 )
 
 pico_set_program_name(ds5-bridge "ds5-bridge")
