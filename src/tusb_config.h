@@ -95,7 +95,10 @@
 #endif
 
 //------------- CLASS -------------//
-#define CFG_TUD_AUDIO             1
+#ifndef ENABLE_AUDIO
+#define ENABLE_AUDIO              1
+#endif
+#define CFG_TUD_AUDIO             ENABLE_AUDIO
 #define CFG_TUD_HID               1
 #define CFG_TUD_CDC               ENABLE_SERIAL
 #define CFG_TUD_MSC               0
