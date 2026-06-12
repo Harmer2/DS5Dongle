@@ -46,7 +46,7 @@ endif ()
 # Reduce to 2 if you observe audio dropouts on your specific unit.
 
 set(SYS_CLOCK_KHZ_VALUE 320000)
-set(OPUS_COMPLEXITY 0 CACHE STRING "Opus encoder complexity (0-10)")
+set(OPUS_COMPLEXITY 2 CACHE STRING "Opus encoder complexity (0-10)")
 include(pico_sdk_import.cmake)
 
 project(ds5-bridge C CXX ASM)
