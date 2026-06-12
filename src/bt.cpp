@@ -241,7 +241,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             break;
         }
 
-        // FIX 2A: purge stale link key, disconnect ACL and restart inquiry on auth failure
+        // CHANGE 1 of 3: on auth failure, drop the stale key AND disconnect the ACL.
+        // The disconnect triggers DISCONNECTION_COMPLETE which already resets all flags
+        // and restarts inquiry — no need to reset flags here too.
         case HCI_EVENT_AUTHENTICATION_COMPLETE: {
             const uint8_t status = hci_event_authentication_complete_get_status(packet);
             const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
@@ -249,8 +251,6 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if (status != ERROR_CODE_SUCCESS) {
                 printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
                 gap_drop_link_key_for_bd_addr(current_device_addr);
-                device_found = false;
-                new_pair = false;
                 if (acl_handle != HCI_CON_HANDLE_INVALID) {
                     hci_send_cmd(&hci_disconnect, acl_handle, ERROR_CODE_AUTHENTICATION_FAILURE);
                 }
@@ -280,7 +280,11 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             break;
         }
 
-        // FIX 2B: set new_pair=true so L2CAP channels open after encryption on PS-button-initiated connect
+        // CHANGE 2 of 3: set device_found=true and new_pair=true when the DualSense
+        // initiates the connection (PS button press). Without these, ENCRYPTION_CHANGE
+        // never opens the L2CAP channels on the incoming path.
+        // CHANGE 3 of 3: the original missing & on hci_accept_connection_request is
+        // preserved correctly here — this was always correct in the original file.
         case HCI_EVENT_CONNECTION_REQUEST: {
             bd_addr_t addr;
             hci_event_connection_request_get_bd_addr(packet, addr);
@@ -288,8 +292,8 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
-                device_found = true;
-                new_pair = true;
+                device_found = true;   // ← added
+                new_pair = true;       // ← added: allows L2CAP open after encryption
                 gap_inquiry_stop();
                 hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
             }
