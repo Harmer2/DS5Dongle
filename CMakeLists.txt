@@ -41,6 +41,14 @@ else ()
     set(ENABLE_BATT_LED_VALUE 0)
 endif ()
 
+# ADD THIS BLOCK (new — insert before SYS_CLOCK_KHZ_VALUE line):
+option(ENABLE_AUDIO "Enable DualSense USB audio (speaker/mic via Opus)" ON)
+if (ENABLE_AUDIO)
+    set(ENABLE_AUDIO_VALUE 1)
+else ()
+    set(ENABLE_AUDIO_VALUE 0)
+endif ()
+
 # Opus encoder complexity (0=lowest CPU, 10=highest quality).
 # At 320 MHz Core 1 handles complexity 0 comfortably.
 # Reduce to 2 if you observe audio dropouts on your specific unit.
@@ -72,17 +80,20 @@ else ()
         "Ensure boards/waveshare_rp2350b_plus_w.h defines it as 16777216.")
 endif ()
 
-add_executable(ds5-bridge
+set(DS5_SOURCES
         src/usb_descriptors.cpp
         src/main.cpp
         src/usb.cpp
-        src/audio.cpp
         src/bt.cpp
         src/config.cpp
         src/cmd.cpp
         src/status_led.cpp
         src/state_mgr.cpp
 )
+if (ENABLE_AUDIO)
+    list(APPEND DS5_SOURCES src/audio.cpp)
+endif ()
+add_executable(ds5-bridge ${DS5_SOURCES})
 
 if (ENABLE_BATT_LED)
     target_sources(ds5-bridge PRIVATE src/battery_led.cpp)
@@ -142,6 +153,7 @@ target_compile_definitions(ds5-bridge PRIVATE
         ENABLE_VERBOSE=${ENABLE_VERBOSE_VALUE}
         ENABLE_BATT_LED=${ENABLE_BATT_LED_VALUE}
         OPUS_COMPLEXITY=${OPUS_COMPLEXITY}
+        ENABLE_AUDIO=${ENABLE_AUDIO_VALUE}
         PICO_EMBED_XIP_SETUP=1
         SYS_CLOCK_KHZ=${SYS_CLOCK_KHZ_VALUE}
 )
@@ -156,7 +168,7 @@ target_include_directories(${PROJECT_NAME} PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
-target_link_libraries(ds5-bridge
+set(DS5_LIBS
         pico_stdlib
         pico_multicore
         hardware_watchdog
@@ -171,8 +183,8 @@ target_link_libraries(ds5-bridge
         pico_btstack_cyw43
         tinyusb_device
         tinyusb_board
-        wdl_resampler
-        opus
 )
-
-pico_add_extra_outputs(ds5-bridge)
+if (ENABLE_AUDIO)
+    list(APPEND DS5_LIBS wdl_resampler opus)
+endif ()
+target_link_libraries(ds5-bridge ${DS5_LIBS})
