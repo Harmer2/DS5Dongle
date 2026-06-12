@@ -124,7 +124,7 @@ void audio_loop() {
         pkt[2] = 0x11 | 0 << 6 | 1 << 7;
         pkt[3] = 7;
         pkt[4] = 0b11111110;
-        const auto buf_len = get_config().audio_buffer_length;
+        const auto buf_len = get_config().haptics_buffer_length;
         pkt[5] = buf_len;
         pkt[6] = buf_len;
         pkt[7] = buf_len;
