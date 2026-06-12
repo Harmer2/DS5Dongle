@@ -256,7 +256,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
                 device_found = false;
                 new_pair = false;
                 if (acl_handle != HCI_CON_HANDLE_INVALID) {
-                    hci_send_cmd(&amp;hci_disconnect, acl_handle, ERROR_CODE_AUTHENTICATION_FAILURE);
+                    hci_send_cmd(hci_disconnect, acl_handle, ERROR_CODE_AUTHENTICATION_FAILURE);
                 }
             } else {
                 hci_send_cmd(&amp;hci_set_connection_encryption, handle, 1);
@@ -289,12 +289,12 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             hci_event_connection_request_get_bd_addr(packet, addr);
             const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
             printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
-            if ((cod &amp; 0x000F00) == 0x000500) {
+            if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
                 new_pair = true;   // required so L2CAP channels open after encryption
                 gap_inquiry_stop();
-                hci_send_cmd(&amp;hci_accept_connection_request, addr, 0x01);
+                hci_send_cmd(hci_accept_connection_request, addr, 0x01);
             }
             break;
         }
