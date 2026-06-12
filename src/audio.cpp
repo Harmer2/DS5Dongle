@@ -158,11 +158,13 @@ void audio_loop() {
 }
             critical_section_exit(&opus_cs);
         if (!have_opus) {
-            haptic_buf_pos = 0;
-      continue;
-}
-bt_write(pkt, sizeof(pkt), true);
-haptic_buf_pos = 0;
+            // Send packet with zeroed Opus payload rather than skipping.
+            // Skipping starves the DualSense audio buffer and causes the
+            // speaker to go silent after ~2 minutes under game load.
+            memset(pkt + 144, 0, 200);
+        }
+        bt_write(pkt, sizeof(pkt), true);
+        haptic_buf_pos = 0;
             
           } // closes: if (haptic_buf_pos == SAMPLE_SIZE) — the for loop body
     } // closes: while (tud_audio_available())
@@ -177,7 +179,7 @@ void audio_init() {
     // Depth 2->4 — gives Core 1 (Opus encoder) more headroom before
     // frames are dropped. At 360 MHz Core 1 encodes ~10ms frames; depth 4
     // covers ~40ms of burst without dropping.
-    queue_init(&audio_fifo, sizeof(audio_raw_element), 2);
+    queue_init(&audio_fifo, sizeof(audio_raw_element), 4);
 
     critical_section_init(&opus_cs);
     multicore_launch_core1_with_stack(core1_entry, audio_core1_stack, sizeof(audio_core1_stack));
@@ -197,7 +199,7 @@ void core1_entry() {
     opus_encoder_ctl(encoder, OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
     opus_encoder_ctl(encoder, OPUS_SET_BITRATE(200 * 8 * 100));
     opus_encoder_ctl(encoder, OPUS_SET_VBR(false));
-    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(0));
+    opus_encoder_ctl(encoder, OPUS_SET_COMPLEXITY(OPUS_COMPLEXITY));
 
     resampler_audio.SetMode(true, 0, false);
     resampler_audio.SetRates(51200, 48000);
