@@ -241,17 +241,21 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             break;
         }
 
-        case HCI_EVENT_CONNECTION_REQUEST: {
-            bd_addr_t addr;
-            hci_event_connection_request_get_bd_addr(packet, addr);
-            const uint32_t cod = hci_event_connection_request_get_class_of_device(packet);
-            printf("[HCI] Incoming ACL request from %s cod=0x%06x\n", bd_addr_to_str(addr), (unsigned int) cod);
-            if ((cod & 0x000F00) == 0x000500) {
-                bd_addr_copy(current_device_addr, addr);
-                device_found = true;
-                new_pair = true;
-                gap_inquiry_stop();
-                hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
+        // FIX 2A: purge stale link key, disconnect ACL and restart inquiry on auth failure
+        case HCI_EVENT_AUTHENTICATION_COMPLETE: {
+            const uint8_t status = hci_event_authentication_complete_get_status(packet);
+            const hci_con_handle_t handle = hci_event_authentication_complete_get_connection_handle(packet);
+            printf("[HCI] Authentication complete handle=0x%04X status=0x%02X\n", handle, status);
+            if (status != ERROR_CODE_SUCCESS) {
+                printf("[HCI] Authentication failed, drop stored key for %s\n", bd_addr_to_str(current_device_addr));
+                gap_drop_link_key_for_bd_addr(current_device_addr);
+                device_found = false;
+                new_pair = false;
+                if (acl_handle != HCI_CON_HANDLE_INVALID) {
+                    hci_send_cmd(&hci_disconnect, acl_handle, ERROR_CODE_AUTHENTICATION_FAILURE);
+                }
+            } else {
+                hci_send_cmd(&hci_set_connection_encryption, handle, 1);
             }
             break;
         }
@@ -276,6 +280,7 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             break;
         }
 
+        // FIX 2B: set new_pair=true so L2CAP channels open after encryption on PS-button-initiated connect
         case HCI_EVENT_CONNECTION_REQUEST: {
             bd_addr_t addr;
             hci_event_connection_request_get_bd_addr(packet, addr);
@@ -284,9 +289,9 @@ static void hci_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t *p
             if ((cod & 0x000F00) == 0x000500) {
                 bd_addr_copy(current_device_addr, addr);
                 device_found = true;
-                new_pair = true;   // required so L2CAP channels open after encryption
+                new_pair = true;
                 gap_inquiry_stop();
-                hci_send_cmd(hci_accept_connection_request, addr, 0x01);
+                hci_send_cmd(&hci_accept_connection_request, addr, 0x01);
             }
             break;
         }
@@ -439,62 +444,56 @@ static void l2cap_packet_handler(uint8_t packet_type, uint16_t channel, uint8_t 
         }
 
         case L2CAP_EVENT_CAN_SEND_NOW: {
-send_element send_packet{};
-bool get_data = false;
-// Always drain audio (priority) queue first.
-// Only send a state packet if no audio is waiting.
-if (!queue_is_empty(&priority_send_fifo)) {
-    get_data = queue_try_remove(&priority_send_fifo, &send_packet);
-} else if (!queue_is_empty(&send_fifo)) {
-    get_data = queue_try_remove(&send_fifo, &send_packet);
-}
-if (get_data) {
-    const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
-    if (status != 0) {
-        printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
-        // On send failure put it back only if it was an audio packet
-        // (state packets are regenerated; re-queuing stale audio is worse)
-        if (!queue_is_empty(&priority_send_fifo) == false) {
-            if (queue_is_full(&priority_send_fifo)) {
-                queue_try_remove(&priority_send_fifo, NULL);
+            send_element send_packet{};
+            bool get_data = false;
+            if (!queue_is_empty(&priority_send_fifo)) {
+                get_data = queue_try_remove(&priority_send_fifo, &send_packet);
+            } else if (!queue_is_empty(&send_fifo)) {
+                get_data = queue_try_remove(&send_fifo, &send_packet);
             }
-            queue_try_add(&priority_send_fifo, &send_packet);
+            if (get_data) {
+                const uint8_t status = l2cap_send(hid_interrupt_cid, send_packet.data, send_packet.len);
+                if (status != 0) {
+                    printf("[L2CAP] L2CAP Send Error, Status: 0x%02X\n", status);
+                    if (!queue_is_empty(&priority_send_fifo) == false) {
+                        if (queue_is_full(&priority_send_fifo)) {
+                            queue_try_remove(&priority_send_fifo, NULL);
+                        }
+                        queue_try_add(&priority_send_fifo, &send_packet);
+                    }
+                }
+            }
+            if (!queue_is_empty(&priority_send_fifo) || !queue_is_empty(&send_fifo)) {
+                l2cap_request_can_send_now_event(hid_interrupt_cid);
+            }
+            break;
         }
-    }
-}
-if (!queue_is_empty(&priority_send_fifo) || !queue_is_empty(&send_fifo)) {
-    l2cap_request_can_send_now_event(hid_interrupt_cid);
-}
-break;
-}
     }
 }
 
 void bt_write(const uint8_t *data, const uint16_t len, const bool priority) {
-if (hid_interrupt_cid == 0) return;
-static send_element packet{};
-memset(packet.data, 0, 512);
-packet.len = len + 1;
-packet.data[0] = 0xA2;
-memcpy(packet.data + 1, data, len);
-fill_output_report_checksum(packet.data + 1, len);
-if (priority) {
-    // Audio packets: drop oldest if full, never block
-    if (queue_is_full(&priority_send_fifo)) {
-        queue_try_remove(&priority_send_fifo, NULL);
+    if (hid_interrupt_cid == 0) return;
+    static send_element packet{};
+    memset(packet.data, 0, 512);
+    packet.len = len + 1;
+    packet.data[0] = 0xA2;
+    memcpy(packet.data + 1, data, len);
+    fill_output_report_checksum(packet.data + 1, len);
+    if (priority) {
+        if (queue_is_full(&priority_send_fifo)) {
+            queue_try_remove(&priority_send_fifo, NULL);
+        }
+        queue_try_add(&priority_send_fifo, &packet);
+    } else {
+        if (queue_is_full(&send_fifo)) {
+            queue_try_remove(&send_fifo, NULL);
+        }
+        if (!queue_try_add(&send_fifo, &packet)) {
+            printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
+            return;
+        }
     }
-    queue_try_add(&priority_send_fifo, &packet);
-} else {
-    // State packets: drop oldest if full to avoid blocking audio
-    if (queue_is_full(&send_fifo)) {
-        queue_try_remove(&send_fifo, NULL);
-    }
-    if (!queue_try_add(&send_fifo, &packet)) {
-        printf("[L2CAP bt_write] Error: Failed to add packet to send FIFO\n");
-        return;
-    }
-}
-l2cap_request_can_send_now_event(hid_interrupt_cid);
+    l2cap_request_can_send_now_event(hid_interrupt_cid);
 }
 
 vector<uint8_t> get_feature_data(uint8_t reportId, uint16_t len) {
