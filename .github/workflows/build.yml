@@ -80,7 +80,7 @@ jobs:
           cp boards/waveshare_rp2350b_plus_w.h \
             "$PICO_SDK_PATH/src/boards/include/boards/waveshare_rp2350b_plus_w.h"
 
-      # ── Standard firmware (360 MHz, Opus complexity 2, optimised defaults) ──
+      # ── Standard firmware (audio enabled, Opus complexity 2) ─────────────────
       - name: Build standard firmware
         run: |
           cmake -S . -B build/standard -G Ninja \
@@ -92,7 +92,7 @@ jobs:
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
 
-      # ── Debug firmware (serial + verbose logging) ────────────────────────────
+      # ── Debug firmware (serial + verbose logging, audio enabled) ─────────────
       - name: Build debug firmware
         run: |
           cmake -S . -B build/debug -G Ninja \
@@ -105,6 +105,18 @@ jobs:
           cmake --build build/debug --target ds5-bridge
           cp build/debug/ds5-bridge.uf2 artifacts/ds5-bridge-debug.uf2
 
+      # ── No-audio firmware (HID + haptics only, no speaker/mic) ───────────────
+      - name: Build no-audio firmware
+        run: |
+          cmake -S . -B build/noaudio -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DPICO_SDK_PATH="$PICO_SDK_PATH" \
+            -DPICO_BOARD=waveshare_rp2350b_plus_w \
+            -DENABLE_AUDIO=OFF
+          cmake --build build/noaudio --target ds5-bridge
+          cp build/noaudio/ds5-bridge.uf2 artifacts/ds5-bridge-noaudio.uf2
+
+      # ── Upload artifacts ──────────────────────────────────────────────────────
       - name: Upload standard UF2 artifact
         uses: actions/upload-artifact@v4
         with:
@@ -117,4 +129,11 @@ jobs:
         with:
           name: ds5-bridge-debug
           path: artifacts/ds5-bridge-debug.uf2
+          if-no-files-found: error
+
+      - name: Upload no-audio UF2 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ds5-bridge-noaudio
+          path: artifacts/ds5-bridge-noaudio.uf2
           if-no-files-found: error
