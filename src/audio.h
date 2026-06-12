@@ -1,8 +1,7 @@
-// REPLACE THE ENTIRE FILE WITH:
 #ifndef DS5_BRIDGE_AUDIO_H
 #define DS5_BRIDGE_AUDIO_H
 
-#include 
+#include <cstdint>
 
 #ifndef ENABLE_AUDIO
 #define ENABLE_AUDIO 1
@@ -15,7 +14,6 @@ void core1_entry();
 void set_headset(bool state);
 void set_state_data(const uint8_t* data, const uint8_t len);
 #else
-// Inline stubs — callers compile cleanly with no #ifdef at every call site
 inline void audio_init() {}
 inline void audio_loop() {}
 inline void set_headset(bool) {}
