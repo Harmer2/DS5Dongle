@@ -30,7 +30,7 @@
 // ── Constants ────────────────────────────────────────────────────────────────
 
 constexpr uint32_t CONFIG_MAGIC   = 0x66ccff00;
-constexpr uint16_t CONFIG_VERSION = 2;
+constexpr uint16_t CONFIG_VERSION = 3;
 
 // 16 pages per sector (4096 / 256)
 constexpr uint32_t WL_PAGES = FLASH_SECTOR_SIZE / FLASH_PAGE_SIZE;
@@ -108,7 +108,7 @@ void config_valid() {
         b->polling_rate_mode = 2;
         printf("[Config] polling_rate_mode invalid — reset to real-time\n");
     }
-    if (b->audio_buffer_length < 16 || b->audio_buffer_length > 128) {
+    if (b->audio_buffer_length < 16 || b->audio_buffer_length > 32) {
         // FIX: default 64->16. Lower value = less audio delay on the DualSense.
         // 64 told the controller to buffer ~64 frames before playing,
         // which was the primary cause of the audio lag you heard.
