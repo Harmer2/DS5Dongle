@@ -88,7 +88,8 @@ jobs:
             -DPICO_SDK_PATH="$PICO_SDK_PATH" \
             -DPICO_BOARD=waveshare_rp2350b_plus_w \
             -DOPUS_COMPLEXITY=2
-          cmake --build build/standard
+          cmake --build build/standard --target ds5-bridge
+          cmake --build build/standard --target ds5-bridge_uf2
           mkdir -p artifacts
           cp build/standard/ds5-bridge.uf2 artifacts/ds5-bridge.uf2
 
