@@ -10,7 +10,9 @@
 #include "bsp/board_api.h"
 #include "bt.h"
 #include "utils.h"
+#if ENABLE_AUDIO
 #include "resample.h"
+#endif
 #include "audio.h"
 #include "hardware/clocks.h"
 #include "hardware/vreg.h"
@@ -230,7 +232,9 @@ int main() {
     bt_init();
     bt_register_data_callback(on_bt_data);
 
+    #if ENABLE_AUDIO
     audio_init();
+#endif
     state_init();
     
 #if !ENABLE_SERIAL
@@ -243,7 +247,9 @@ int main() {
 #endif
         cyw43_arch_poll();
         tud_task();
+      #if ENABLE_AUDIO
         audio_loop();
+#endif
         interrupt_loop();
         status_led_tick();
 #if ENABLE_BATT_LED
